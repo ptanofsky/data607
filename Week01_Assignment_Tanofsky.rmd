@@ -1,0 +1,103 @@
+---
+title: "DATA607_Week01_Assignment"
+author: "Philip Tanofsky"
+date: "2/2/2020"
+output: html_document
+---
+
+# Introduction
+
+The article "Be Suspicious Of Online Movie Ratings, Especially Fandango’s" by Walt Hickey published at https://fivethirtyeight.com/features/fandango-movies-ratings/ outlines the disparity in ratings between the movie ticket-selling company Fandango against the ratings of aggregation sites such as Rotten Tomatoes, Metacritic, and IMDB. The article indicates that Fandango movie ratings are typically higher than the users and the critics ratings from the other aggregation web sites. The author of the article also identified a likely defect in the Fandango web site display of ratings which always rounds a movie's rating up to the nearest half-star which is counter to normal rounding standards. According to the author's research, due to Fandango's rating algoritm, essentially all movies on the Fandango site are rated 3 stars or above on a 5-star scale.
+
+# Load and Transform Data
+
+I load the raw csv file from the fivethirtyeight Github repo into an R data frame and output the number of rows and columns as a sanity check against the information provided on the Github repo. The repo page does identify 147 entries in the csv dataset. I also perform the head function to visually see some of the records.
+
+```{r setup}
+# Import RCurl to pull the csv file from the Github repo
+library(RCurl)
+
+# Load the csv file from the repo's URL
+movings_ratings_url <- getURL("https://raw.githubusercontent.com/fivethirtyeight/data/master/fandango/fandango_score_comparison.csv")
+movie_ratings <-data.frame(read.csv(text=movings_ratings_url, header=T))
+
+# Output initial dimensions of the data frame object
+dim(movie_ratings)
+
+head(movie_ratings)
+```
+
+I remove several of the columns from the dataset that pertain to critics' ratings. As the Fandango data is based on user voting, I have decided to only include user rating data from the aggregation sites to ensure a fair comparison.
+
+```{r remove_columns}
+# Remove the columns from Rotten Tomatoes and Metacritic for the critics reviews
+# Considering Fandango only allows for user voting, only keep data from equivalent users for comparison
+movie_ratings <- movie_ratings[,c('FILM', 'RottenTomatoes_User', 'Metacritic_User', 'IMDB', 'Fandango_Stars', 'Fandango_Ratingvalue', 'RT_user_norm', 'Metacritic_user_nom', 'IMDB_norm', 'RT_user_norm_round', 'Metacritic_user_norm_round', 'IMDB_norm_round', 'Metacritic_user_vote_count', 'IMDB_user_vote_count', 'Fandango_votes', 'Fandango_Difference')]
+
+dim(movie_ratings)
+```
+
+I rename several of the columns to remove abbreviations and shortened words to allow for better readability of the columns. The column names tend to get long with this approach, but I do believe it adds clarity to the resulting document.
+
+```{r rename_columns}
+library(plyr)
+movie_ratings <- rename(movie_ratings ,c("FILM"="Movie","IMDB"="IMDB_User","Fandango_Ratingvalue"="Fandango_User_Rating","RT_user_norm"="RottenTomatoes_user_normalized","Metacritic_user_nom"="Metacritic_user_normalized","IMDB_norm"="IMDB_normalized", "RT_user_norm_round"="RottenTomatoes_user_normalized_rounded", "Metacritic_user_norm_round"="Metacritic_user_normalized_rounded","IMDB_norm_round"="IMDB_normalized_rounded"))
+
+```
+
+# Create Derived Columns
+
+To more easily compare the Fandango star ratings to the normalized user ratings of the three aggregation sites, I calculate the difference in resulting stars and then add that result as a column to the movie ratings data frame. By calculating and adding the three derived columns to the primary data frame, the data is now readily available to assist in identifying potentially meaningful differences in the star ratings. I consider the movie_ratings data frame with the derived columns as the primary dataset for any analysis to be performed.
+
+```{r add_derived_columns}
+# Calculate difference between Rotten Tomatoes normalized 5-star score with Fandango
+# Add derived column to data frame
+movie_ratings$RottenTomatoes_Fandango_Star_Difference <- with(movie_ratings, 
+                                              Fandango_Stars - RottenTomatoes_user_normalized_rounded)
+
+# Calculate difference between Metacritic normalized 5-star score with Fandango
+# Add derived column to data frame
+movie_ratings$Metacritic_Fandango_Star_Difference <- with(movie_ratings, 
+                                              Fandango_Stars - Metacritic_user_normalized_rounded)
+
+# Calculate difference between IMDB normalized 5-star score with Fandango
+# Add derived column to data frame
+movie_ratings$IMDB_Fandango_Star_Difference <- with(movie_ratings, 
+                                              Fandango_Stars - IMDB_normalized_rounded)
+
+dim(movie_ratings)
+```
+
+As the article highlights a meaningful disparity in the Fandango web site ratings against those of three aggregation sites, I created subset data frames for each of the three aggregation sites in which the Fandango star rating was at least one star or greater than the normalized users rating from the aggregation site. I thought it would be interesting to then be able to compare the resulting data frames in which the discrepancy is at least a whole star difference. The following subsets allow for analysis between Fandango and each of the aggregation sites.
+
+```{r subset_dataframe_by_star_difference_rotten_tomates}
+# 
+ratings_diff_greater_than_5_rotten_tomates <- subset(movie_ratings, RottenTomatoes_Fandango_Star_Difference >= 1.0)
+
+summary(ratings_diff_greater_than_5_rotten_tomates)
+```
+
+The above data frame subset for Rotten Tomatoes compared to Fandango returns 80 entries in which the Fandango star rating is 1 or more stars greater than the Rotten Tomatoes normalized user rating.
+
+```{r subset_dataframe_by_star_difference_metacritic}
+# 
+ratings_diff_greater_than_5_metacritic <- subset(movie_ratings, Metacritic_Fandango_Star_Difference >= 1.0)
+
+summary(ratings_diff_greater_than_5_metacritic)
+```
+
+The above data frame subset for Metacritic compared to Fandango returns 74 entries in which the Fandango star rating is 1 or more stars greater than the Metacritic normalized user rating.
+
+```{r subset_dataframe_by_star_difference_imdb}
+# 
+ratings_diff_greater_than_5_imdb <- subset(movie_ratings, IMDB_Fandango_Star_Difference >= 1.0)
+
+summary(ratings_diff_greater_than_5_imdb)
+```
+
+The above data frame subset for IMDB compared to Fandango returns 64 entries in which the Fandango star rating is 1 or more stars greater than the IMDB normalized user rating.
+
+# Findings and Recommendations
+
+Based on the article analysis and subset data frames above, the results do indicate a Fandango rating system not in-line with the three movie rating aggregation sites. Not only do the results indicate higher scores by Fandango but scores quite a bit higher than the aggregation sites. For future analysis, as the article was initially published in 2015, a good exercise would be to perform the same ratings' analysis for movies released after the article's published date. This subsequent analysis exercise would then confirm if Fandango performed any meaningful adjustments to its movie-rating algorithm to be more in-line with aggregation sites. Also, additional research should be performed to confirm that Fandango did fix the abnormal rounding practice on Fandango's web site.
+
