@@ -1,0 +1,145 @@
+---
+title: "DATA 607 Week 02 Assignment"
+author: "Philip Tanofsky"
+date: "2/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This project uses data from an informal survery of five friends and family members regarding six of the movies nominated for the Academy Award for Best Picture in 2020. The movie ratings provided by the five individuals are analyzed to determine the highest rated movie based on this population. The project also highlights data retrieval techniques along with data transformation techniques using the R programming language.
+
+# Load and Transform Data
+
+The data from the informal survey is persisted in a MySQL database running on a localhost server. The schema named movie_ratings contains three tables. The first table movies contains the list of six nominated movies to be rated. The second table individuals identifies the five people asked to rate the six movies. The final table ratings includes the ratings by movie and individual combination. If an individual did not watch a movie, then a rating was not provided by that individual for said movie. The schema uses three tables in an effort to normalize the data because not every participant watched all six movies. The movies are rated on a scale of 1 to 5.
+
+The data is retrieved from the MySQL server running locally. The R keyring package is used to ensure username and password security for the MySQL server as the R markdown file would otherwise contain the private information in plain text. The database connection is used to initially create a dataframe corresponding to each table in the schema.
+
+```{r retrieve-data}
+library(RMySQL)
+# Connect to MySQL database running on localhost
+# Initially I connected directly to the MySQL server by providing the username and password in plain text. Leaving the line commented for documentation purposes.
+# mydb = dbConnect(MySQL(), user='XXXX', password='XXXX', dbname='movie_ratings', host='localhost')
+
+library(keyring)
+# Use the keyring package to allow for username and password to be obtained from keyring without requiring the sensitive information to be in file as plain text
+# This command does require the user to allow the R process access to the MySQL server running locally
+# This will make this file not 100% reproducible, but can be modified to allow different user access
+mydb = dbConnect(MySQL(), user=keyring::key_list("my-sql-db")[1,2], 
+                 password=keyring::key_get("my-sql-db", key_list("my-sql-db")[1,2]),
+                 dbname='movie_ratings', host='localhost')
+
+# Retrieve the movies with query and store the results in a dataframe called movies
+movies <- dbGetQuery(mydb, "select id, title, director from movies")
+head(movies)
+
+# Retrieve the individuals with query and store the results in a dataframe called individuals
+individuals <- dbGetQuery(mydb, "select id, name, relationship from individuals")
+head(individuals)
+
+# Retrieve the ratings with query and store the results in a dataframe called ratings
+ratings <- dbGetQuery(mydb, "select individual_id, movie_id, rating from ratings")
+head(ratings)
+```
+
+With the three initial dataframes, two left joins are performed on the dataframes to create one large dataframe consisting of all the data. Once the data is combined into one dataframe, the rating column is converted to numeric to allow for mathematical application to the numeric ratings.
+
+Because the data was retrieved from a normalized schema, the initial large dataframe does not contain any missing rows as only the data present represents the ratings provided by the individuals. As the data is no longer in a normalized form, redundancy of data exists as each combination of movie and individual requires an entry.
+
+```{r combine-data}
+# Combine all the database tables into one large joined table in a dataframe
+library(dplyr)
+movies_and_ratings <- left_join(movies, ratings, by = c("id" = "movie_id"))
+movies_and_ratings <- left_join(movies_and_ratings, individuals, by = c("individual_id" = "id"))
+head(movies_and_ratings)
+
+# Convert the rating column to numeric
+movies_and_ratings$rating <- as.numeric(as.character(movies_and_ratings$rating))
+
+# Display the data types for each column
+sapply(movies_and_ratings, class)
+```
+
+The above display is used to confirm the ratings column is numeric despite being persisted in the schema as a character field.
+
+# Data Analysis
+
+Based on self interest of wanting all the data displayed in a matrix form, I used the reshape2 package to in essence create a pivot table of the one large dataframe. Because the large dataframe did not contain any missing data, the dcast function did apply 'NA' to any cells in the resulting dataframe in which the individual did not review the movie.
+
+Once the data was combined into this more concise dataframe, the mean for each individual was calculated and added as an additional column to the dataframe. The bar chart below shows the overall average rating for each individual.
+
+```{r reshape-data}
+library(reshape2)
+# Convert the large dataframe into a matrix view of ratings by individual
+# Basically, this would be applying a pivot table to the data frame
+result = dcast(movies_and_ratings, name ~ title, value.var="rating")
+result
+
+# Confirm all the movie rating columns are numeric
+sapply(result, class)
+
+# Calculate the mean for each individual and add a column to the dataframe
+result$ratingsMean <- rowMeans(result[,2:6], na.rm=TRUE)
+result
+
+# plot the individuals' averages
+library(ggplot2)
+bar <- ggplot(result, aes(name, ratingsMean))
+bar + geom_bar(stat = "identity") + ylim(0, 5) + ggtitle("Individual Average Ratings") + ylab("Average Rating")
+
+```
+
+The above bar chart shows Bart provided the highest average of movie ratings with an average of 3.2 out of 5. The chart also shows David with the lowest movie ratings average at 2.3 out of 5.
+
+After identifying the average rating given by each individual, the next step is to determine the average rating for each of the six movies.
+
+```{r output-analysis}
+# Goal: Output the mean of each movie in graphical form
+
+# I realize this approach may be a bit sloppy, but this was the only way I could calculate the average rating by movie.
+
+# Subset initial large dataframe for 1917, and then find the mean on the rating column
+sub_1917 <- subset(movies_and_ratings, title == "1917")
+sub_1917
+movie1917_mean <- mean(sub_1917$rating)
+
+# Subset initial large dataframe for Jojo Rabbit, and then find the mean on the rating column
+sub_jojo <- subset(movies_and_ratings, title == "Jojo Rabbit")
+sub_jojo
+jojo_mean <- mean(sub_jojo$rating)
+
+# Subset initial large dataframe for Little Women, and then find the mean on the rating column
+sub_litt <- subset(movies_and_ratings, title == "Little Women")
+sub_litt
+little_mean <- mean(sub_litt$rating)
+
+# Subset initial large dataframe for Marriage Story, and then find the mean on the rating column
+sub_marr <- subset(movies_and_ratings, title == "Marriage Story")
+sub_marr
+marriage_mean <- mean(sub_marr$rating)
+
+# Subset initial large dataframe for Parasite, and then find the mean on the rating column
+sub_para <- subset(movies_and_ratings, title == "Parasite")
+sub_para
+parasite_mean <- mean(sub_para$rating)
+
+# Create two columns: 1. The movie titles, 2. Movie rating average
+title <- c('1917', 'Jojo Rabbit', 'Little Women', 'Marriage Story', 'Parasite')
+avg_rating <- c(movie1917_mean, jojo_mean, little_mean, marriage_mean, parasite_mean)
+movie_rating_avg <- data.frame(title, avg_rating)
+movie_rating_avg
+
+# plot the movie averages
+bar <- ggplot(movie_rating_avg, aes(title, avg_rating))
+bar + geom_bar(stat = "identity") + ylim(0, 5) + ggtitle("Movie Average Ratings") + ylab("Average Rating")
+```
+
+The above bar chat indicates Parasite received the highest average rating of 3.5 out of 5, while Marriage Story received the lowest average rating of 2.75 out of a possible 5.
+
+# Findings and Recommendations
+
+Personal findings from this exercise included a basic working knowledge of MySQL server and MySQL workbench. Previously, I had not used either MySQL asset, so the requirement to have a local SQL server running was a valuable lesson. Also, the assignment suggestion to hide username and password also proved to be a useful experience. The resulting implementation was not difficult, but did force me to understand users and privileges of the database server while also learning about the possibility of local keyrings for security. The biggest challenge turned out to be creating the pivot table of the ratings due to the normalized schema. I wanted to ensure my tables did not contain any empty fields, but in doing so, I found the task of creating the pivot table difficult. The goal of the pivot table was to display the data in the most concise form. In a backwards way, I actually ended up adding in missing data just for the sake of the display and the ability to calculate the individuals' rating averages. I will fully admit I did not use ggplot to its fullest extent, but I did make a concerted effort to use the ggplot2 package for displaying the bar chats as practice of the ggplot2 package. Overall, the exercise above required me to learn quite a bit of the tooling used for data preparation that I believe will be valuable down the road.
