@@ -1,0 +1,139 @@
+---
+title: "DATA 607 Week 3 Assignment"
+author: "Philip Tanofsky"
+date: "2/15/2020"
+output: html_document
+---
+
+# Problem 1
+
+1. Using the 173 majors listed in fivethirtyeight.com’s College Majors dataset [https://fivethirtyeight.com/features/the-economic-guide-to-picking-a-college-major/], provide code that identifies the majors that contain either "DATA" or "STATISTICS"
+
+```{r regex-problem-01}
+# Import RCurl to pull the csv file from the Github repo
+library(RCurl)
+
+# Load the csv file from the Github repo's URL
+college_majors_url <- getURL("https://raw.githubusercontent.com/fivethirtyeight/data/master/college-majors/recent-grads.csv")
+college_majors <-data.frame(read.csv(text=college_majors_url, header=T))
+
+# Perform regex using grep function and then output the result
+data_or_stats <- grep(pattern = 'DATA|STATISTICS', college_majors$Major, value = TRUE, ignore.case = TRUE)
+data_or_stats
+```
+
+# Problem 2
+
+Write code that transforms the data below:
+
+[1] "bell pepper"  "bilberry"     "blackberry"   "blood orange"
+
+[5] "blueberry"    "cantaloupe"   "chili pepper" "cloudberry"  
+
+[9] "elderberry"   "lime"         "lychee"       "mulberry"    
+
+[13] "olive"        "salal berry"
+
+Into a format like this:
+
+c("bell pepper", "bilberry", "blackberry", "blood orange", "blueberry", "cantaloupe", "chili pepper", "cloudberry", "elderberry", "lime", "lychee", "mulberry", "olive", "salal berry")
+
+
+```{r regex-problem-02}
+library(stringr)
+
+original_data <- '[1] "bell pepper"  "bilberry"     "blackberry"   "blood orange"
+
+[5] "blueberry"    "cantaloupe"   "chili pepper" "cloudberry"  
+
+[9] "elderberry"   "lime"         "lychee"       "mulberry"    
+
+[13] "olive"        "salal berry"'
+
+# str_extract_all returns a list
+result <- str_extract_all(original_data, pattern = '[a-z]+\\s?[a-z]+')
+
+result_string <- str_c(result, collapse = ", ")
+writeLines(result_string)
+
+# vector <- as.vector(unlist(result))
+# vector
+```
+
+# Problem 3
+
+1. (.)\1\1
+
+Matches strings containing any single character except new line followed by '\1\1'.
+
+2. "(.)(.)\\2\\1"
+
+Matches strings containing any two characters that are immediately followed by the same two characters in the opposite order. In essence, it matches a 4-character palindrome.
+
+3. (..)\1
+
+Matches strings containing any two characters (except new line) followed by '\1'.
+
+4. "(.).\\1.\\1"
+
+Matches strings containing any single character (except new line) followed by any character then the matched character followed by any character, then the matched character again.
+
+5. "(.)(.)(.).*\\3\\2\\1"
+
+Matches strings containing any three characters in a row in which the three characters are repreated but in the opposite order later in the string.
+
+See samples below for validating the above descriptions.
+
+```{r regex-problem-03}
+sample_01 <- c('a\1\1', 'b\1\1', 'ccc\1\1c', 'd\1d')
+str_view(sample_01, "(.)\1\1")
+
+sample_02 <- c('abcccba', 'badmomdad', 'maddam')
+str_view(sample_02, "(.)(.)\\2\\1")
+
+sample_03 <- c('abc\1d', 'abc\2dd', '\1d')
+str_view(sample_03, "(..)\1")
+
+sample_04 <- c('philzlyl')
+str_view(sample_04, "(.).\\1.\\1")
+
+sample_05 <- c('philzzzzzlih', 'phillih','philzzzzzhil','philzzliphzzzlihp')
+str_view(sample_05, "(.)(.)(.).*\\3\\2\\1")
+
+```
+
+# Problem 4
+
+Construct regular expressions to match words that:
+
+Start and end with the same character.
+
+Answer: "^(.).*\\\\1$"
+
+```{r regex-problem-04-01}
+# Start and end with the same character.
+sample_04_01 <- c('helloh', 'hello', 'helloho')
+str_view(sample_04_01, "^(.).*\\1$")
+```
+
+Contain a repeated pair of letters (e.g. "church" contains "ch" repeated twice.)
+
+Answer: "(..).*\\\\1"
+
+```{r regex-problem-04-02}
+# Contain a repeated pair of letters (e.g. "church" contains "ch" repeated twice.)
+sample_04_02 <- c('church', 'badmomdad', 'helo')
+str_view(sample_04_02, "(..).*\\1")
+```
+
+Contain one letter repeated in at least three places (e.g. "eleven" contains three "e"s.)
+
+Answer: "(.).*\\\\1.*\\\\1"
+
+```{r regex-problem-04-03}
+# Contain one letter repeated in at least three places (e.g. "eleven" contains three "e"s.)
+sample_04_03 <- c('eleven', 'elevn', 'daddy', 'dady')
+str_view(sample_04_03, "(.).*\\1.*\\1")
+```
+
+See the samples to confirm answers above.
