@@ -1,0 +1,138 @@
+---
+title: "DATA 607 Week 05 Assignment"
+author: "Philip Tanofsky"
+date: "2/29/2020"
+output: html_document
+---
+
+
+# Introduction
+
+This assignment presents the capabilities of the R packages of tidyr and dplyr in order to tidy an input CSV file and provide analysis through transformations of the tidy dataframe. The tidy nature of the data follows the definition of Tidy Data as defined by Hadley Wickham. The analysis compares the flight arrivals at five American airports from two airlines.
+
+# Tidy Input File
+
+In an attempt to remain as true as possible to the assignment's example input file, the raw CSV file does not contain two column headers, an empty row, and only lists the two airlines once each. In order to tidy the input data, column headers were added for the first two columns, Airline and Arrival. The arrival column header indicates the category of delayed or on-time. Next, the empty row was removed from the data. Finally, airline names were populated for each subsequent row that initially did not include the airline name. These tidy tactics allowed for full population of the input data table.
+
+```{r read-csv-file}
+library(tidyr)
+library(dplyr)
+
+# Load the csv file from the local directory
+arrivals_raw <- read.csv(file = 'arrivals.csv', header=TRUE, check.names=FALSE, fill=TRUE, na.strings=c(""))
+
+names(arrivals_raw)[1] <- "Airline"
+names(arrivals_raw)[2] <- "Arrival"
+
+arrivals_raw_rm <- arrivals_raw %>% filter_all(any_vars(!is.na(.)))
+
+arrivals_raw_filled <- arrivals_raw_rm %>% fill(Airline)
+```
+
+# Create Long Tidy Dataframe
+
+From the full table based on the input file, the data was denormalized to meet the tidy long standards as defined by Wickham. This form of the data follows the rules in which each column is a variable, each observation forms a row, and each observational type forms a table. Because of the tidy rules, the rows/observations do contain data redundancy, but in doing so, the tidy form ensures for each analysis of the numerical data by observation. The long tidy form of the data identifies the number of cases of on-time and delayed flights by the combination of airline and destination airport.
+
+```{r tidy-df-long}
+table_tidy_long <- arrivals_raw_filled %>% 
+  pivot_longer(c(`Los Angeles`, `Phoenix`, `San Diego`, `San Francisco`, `Seattle`), names_to = "Destination", values_to = "Cases")
+
+table_tidy_long
+
+# Transform tibble to dataframe
+table_tidy_long_df <- tbl_df(table_tidy_long)
+```
+
+# Filter Long Dataframe
+
+Based on the long tidy form of the data, the data was filtered to only include west coast airports, i.e., airports located in the Pacific time zone, which excluded Phoenix. The decision to use west coast airports was arbitrary as just an exercise of using the filter functionality of the dplyr package.
+
+```{r filter-by-criteria}
+(filter(table_tidy_long_df, Destination == 'Los Angeles'))
+
+(filter(table_tidy_long_df, Airline == 'ALASKA'))
+
+# Filter for West Coast airpots
+(filter(table_tidy_long_df, Destination %in% c('Los Angeles', 'San Francisco', 'San Diego', 'Seattle')))
+```
+
+# Select Long Dataframe
+
+The select functionality was used to order the long tidy dataframe by the destination airport, followed by a combined ordering based on the destination airport and the number of cases. The final selection exercise outlined the capability of selecting consecutive columns, which produced a long tidy table without the airlines.
+
+```{r reorder-select-by-criteria}
+# Re-order by Destination
+(arrange(table_tidy_long_df, desc(Destination)))
+
+# Re-order by Destination and Cases
+(arrange(table_tidy_long_df, Destination, Cases))
+
+# Select columns by name
+(select(table_tidy_long_df, Arrival:Cases))
+```
+
+# Summarise Long Dataframe
+
+To provide some meanginful analysis of the sample data, an initial summary was performed to count the total number of on-time and delayed flights by airline. The next summary attempt, similar to the first, calculated the count of on-time and delayed flights by destination airport. The final analysis performed grouped the data by destination airport and arrival type, then counting the instances before providing the sum, average, maximum, and minimum of each airport and arrival type pairing before excluding the Phoenix airport. The chained functions allowed for the display of the performance of flight arrivals by airport.
+
+```{r group-by-and-summarise}
+# Group by and Summarise work
+by_airline_arrival <- group_by(table_tidy_long_df, Airline, Arrival)
+summarise(by_airline_arrival, total = sum(Cases, na.rm = TRUE))
+
+by_dest_arrival <- group_by(table_tidy_long_df, Destination, Arrival)
+summarise(by_dest_arrival, total = sum(Cases, na.rm = TRUE))
+
+# Group flights by destination and arrival type.
+# Summarise to compute total count, mean, maximum and minimum
+# Filter to remove Phoenix airport
+arrivals <- table_tidy_long_df %>% 
+  group_by(Destination, Arrival) %>% 
+  summarise(
+    count = n(),
+    total_arrivals = sum(Cases, na.rm = TRUE),
+    avg = mean(Cases, na.rm = TRUE),
+    max = max(Cases, na.rm = TRUE),
+    min = min(Cases, na.rm = TRUE)
+  ) %>% 
+  filter( Destination != 'Phoenix')
+
+arrivals
+```
+
+# Create Wide Tidy Dataframe
+
+Out of curiosity, I created a wide tidy file in which the arrival types are defined as columns for each combination of airline and destination airport. I understand this doesn't quite follow Wickham's definition of tidy as each row captures more than one observation. I chose to create this form of a near tidy table to utilize the mutate functionality and create additional columns for analysis.
+
+```{r tidy-df-wide}
+table_tidy_long <- arrivals_raw_filled %>% 
+  pivot_longer(c(`Los Angeles`, `Phoenix`, `San Diego`, `San Francisco`, `Seattle`), names_to = "Destination", values_to = "Cases")
+
+table_tidy_wide <- table_tidy_long  %>%
+    pivot_wider(names_from = 'Arrival', values_from = 'Cases')
+
+# Transform tibble to dataframe
+table_tidy_wide_df <- tbl_df(table_tidy_wide)
+
+table_tidy_wide_df
+```
+
+# Mutate Wide File
+
+Based on the wide tidy dataframe, the mutate functionality performs calculations to sum the total arrivals by airline and destination airport while also calculating the percentage of on-time flights based on the sum calculation in the same mutate statement. The resulting table displays two additional columns for the two calculations performed. The wide format tidy table allows for ease of analysis when multiple variables are captured in a single row to calculate aggregate values. Finally, the resulting analysis was ordered by the highest on-time arrival percentage by airline and destination airport.
+
+```{r mutate-wide-df}
+# Create column for Total Arrivals by Airline and Destination
+# Create column for percentage of on-time arrivals by airline and destination
+df_with_cols <- mutate(table_tidy_wide_df,
+  `Total Arrivals` = `on time` + delayed,
+  `On Time Pct` = `on time` / `Total Arrivals` * 100)
+
+df_with_cols
+
+(arrange(df_with_cols, desc(`On Time Pct`)))
+```
+
+# Conclusions
+
+This assignment clearly demonstrated the value of tidy data. Coming from a software development background, I always attempted to normalize data for storage in relational databases. The week's reading along with this assignment demonstrated the value of denormalizing data when appropriate in order to make data analysis easier. Also, transforming input data into a tidy form can make the data easier and simpler to read, which in turn can make the analysis tasks easier to write in R and understand when displayed. The tidyr and dplyr packages are powerful tools in the R programming language that with some practice can transform messy input data into data structures more suited for data analysis. As for the conclusion regarding the sample data, the Phoenix airport has the best on-time percentages, and the Alaska airline outperforms the American West airline.
