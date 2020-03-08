@@ -1,0 +1,220 @@
+---
+title: "DATA 607 Project 2 Part I"
+author: "Philip Tanofsky"
+date: "3/7/2020"
+output: html_document
+---
+
+# Introduction
+
+In Part I of the Project 2, the assignment presents the effort to tidy the CSV file suggested by colleague Sung Lee based on the data at https://data.cityofnewyork.us/Education/2010-AP-College-Board-School-Level-Results/itfs-ms3e. The initial CSV required multiple steps to perform a proper tidy and clean of the data. The analysis of the input data attempts to identify the reason for the mean number of test takers, tests taken, and high test scores received resulting in a value higher than the 75th quartile of the provided data.
+
+The initial input file contains the number of AP test takers, the count of AP tests taken, and the count of exams with a score of 3, 4, or 5 from 258 high schools in New York City from the year 2010.
+
+```{r read-csv-file}
+library(tidyr)
+library(dplyr)
+library(RCurl)
+library(stringi)
+library(ggplot2)
+
+# Load the csv file from the local directory
+school_level_results_raw <- read.csv(file = '2010__AP__College_Board__School_Level_Results.csv', header=TRUE, check.names=FALSE, fill=TRUE, na.strings=c(""))
+
+head(school_level_results_raw)
+dim(school_level_results_raw)
+```
+
+# Tidy the Data
+
+To tidy the data, the variables of "AP Test Takers", "Total Exams Taken", and "Number of Exams with scores 3 4 or 5" are melted to a column titled "Category" with the counts of each captured in the column "Frequency". Looking through the raw data, several schools did not have a value for any of the three fields despite being listed in the data. Upon checking the Web site with the data, the page includes the note "Records with 5 or fewer students are suppressed." With that insight, I filtered out the rows in which no data is provided for a high school. As the actual count is not known, I did not want to presume so for each value, so I chose to remove the rows for those high schools from the raw data. The removal of such rows results in the count of 233 high schools in the data.
+
+The final long tidy table of the input data includes a row for each category - AP Test Takers, Total Exams Taken, and Number of Exams with scores 3 4 or 5 - for each high school with the corresponding count (or frequency) from the provided data.
+
+```{r tidy-data}
+
+# Replace missing values with zero (0)
+school_level_results_raw[is.na(school_level_results_raw)] <- 0
+
+head(school_level_results_raw)
+
+# Now remove the rows in which all values are zero, data is supressed by data provider
+school_level_results_raw <- filter(school_level_results_raw, `AP Test Takers` > 0 | `Total Exams Taken` > 0 | `Number of Exams with scores 3 4 or 5` > 0)
+
+dim(school_level_results_raw)
+
+school_level_results_long <- school_level_results_raw %>% 
+  pivot_longer(c(`AP Test Takers`, `Total Exams Taken`, `Number of Exams with scores 3 4 or 5`), names_to = "Category", values_to = "Frequency")
+
+# final table
+head(school_level_results_long)
+```
+
+# Visualize the Data
+
+The purpose of creating a Category column is to enable the use of a box plot to see the three categories holistically in a side-by-side manner. The first box plot naively plots the entirety of the long tidy table. This initial plot shows many outliers quite distanced from the boxes of the box plot.
+
+```{r visualize-data-1, fig.width=10,fig.height=11}
+
+# Basic box plot
+p0 <- ggplot(school_level_results_long, aes(x=Category, y=Frequency)) + 
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4) +
+#  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(subtitle="Category Vs Frequency Count", 
+       y="Count", 
+       x="Category", 
+       title="Box Plot")
+p0
+```
+
+In an effort to focus attention on the boxes of the box plot, the lower and upper whiskers are computed and from those calculations the y limits of the Cartesian coordinates are scaled to more clearly display the boxes and the mean values represented as diamonds. The mean diamond for each category is visibly above the upper whisker indicating the mean across the 233 high schools is above the 75th quartile.
+
+```{r visualize-data-2, fig.width=10,fig.height=11}
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(school_level_results_long$Frequency)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+p10 = p0 + coord_cartesian(ylim = ylim1*1.4) +
+#    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(subtitle="Category Vs Frequency Count", 
+       y="Count", 
+       x="Category", 
+       title="Box Plot")
+
+# This is a boxplot of the 3 categories, in which it shows the mean is above the 75 quartile for all three of the categories
+p10
+```
+
+In trying to find the best suited plot for this information, I stumbled upon the violin plot which is similar to the box plot. The violin plot further demonstrates the majority of the frequency values are at or near zero, with a few outliers quite a bit higher on the plot. This additional insight led me figure out how to display this disparity across the high schools.
+
+```{r visualize-data-3, fig.width=10,fig.height=11}
+# From: http://r-statistics.co/Top50-Ggplot2-Visualizations-MasterList-R-Code.html
+# plot
+g <- ggplot(school_level_results_long, aes(Category, Frequency))
+g + geom_violin() + 
+  labs(title="Violin plot", 
+       subtitle="Category vs Category Count",
+       x="Category",
+       y="Count")
+```
+
+# Analyze the Data
+
+Based on the disparity demonstrated in the box plot and violin plot, I calculate the mean for each category and then count the number of high schools at or above the mean value for each category. The calculations below indicate 56 high schools above the mean of AP test takers, 42 high schools above the mean of exam scores of 3 or greater, and 51 high schools above the mean of total exams taken per high school. These three counts are of the 233 high schools contributing to the input data. Even the highest value of 56 schools above the mean in AP test takers indicates that less than a quarter of the high schools are carrying the mean value to its height. Conversely, this statistic would indicate a disparity across the New York City high schools in which over three quarters of the high schools are participating in these exams at below mean level. The following plots are an attempt to elucidate this understanding.
+
+```{r calculate-mean-per-category}
+by_category <- group_by(school_level_results_long, Category)
+summarise(by_category, cat_mean = mean(Frequency, na.rm = TRUE))
+
+(dim(filter(school_level_results_long, Category == "AP Test Takers", Frequency >= 119.0)))
+
+(dim(filter(school_level_results_long, Category == "Number of Exams with scores 3 4 or 5", Frequency >= 93.1)))
+
+(dim(filter(school_level_results_long, Category == "Total Exams Taken", Frequency >= 181.0)))
+```
+
+Naively, I attempted a bar plot with all the data in the long tidy table. As can be seen below, the result was not helpful in really any manner. I chose to leave the plot here as an example of a plot in which the use of data in bulk needs to be presented or synthesized better for proper communication.
+
+```{r analyze-data-1}
+# Just plot the values in Frequency by school name
+
+# Plots for analysis
+p1 <- ggplot(data=school_level_results_long, aes(x=`SchoolName`, y=`Frequency`)) + 
+      geom_bar(stat="identity") +
+      labs(subtitle="School Vs Category Count", 
+      y="Category Count", 
+      x="School Name", 
+      title="Bar Plot")
+p1
+```
+
+In trying to identify a plot capabile of conveying the disparity in high school participation in the AP exams, I chose the diverging barchart. Before building the chart, the frequency of AP test takers by high school is normalized in an effort to ensure even the outlying data could clearly fit the chart. After performing the normalization, the calculation is then charted for each school as either being above or below the mean value. The bars in green to the right represent those above the mean, while the bars in red to the left represent those below the mean. The bars are also sorted to provide a cleaner depiction. To provide a comprehensive chart with all schools represented, the chart is flipped to allow for a longer vertical representation. The chart clearly demonstrates less than half of the schools are above the mean in AP test takers.
+
+```{r analyze-data-3, fig.width=10,fig.height=8}
+# Data Prep
+# Test Takers Count
+test_takers_cnt <- school_level_results_long %>% filter(Category == "AP Test Takers")
+
+test_takers_cnt$zed <- round((test_takers_cnt$Frequency - mean(test_takers_cnt$Frequency))/sd(test_takers_cnt$Frequency), 2)
+test_takers_cnt$type <- ifelse(test_takers_cnt$zed < 0, "below", "above")  # above / below avg flag
+test_takers_cnt <- test_takers_cnt[order(test_takers_cnt$zed), ]  # sort
+# convert to factor to retain sorted order in plot.
+test_takers_cnt$SchoolName <- factor(test_takers_cnt$SchoolName, levels = test_takers_cnt$SchoolName) 
+
+# Diverging Barcharts
+ggplot(test_takers_cnt, aes(x=SchoolName, y=zed, label=zed)) + 
+  geom_bar(stat='identity', aes(fill=type), width=.5)  +
+  scale_fill_manual(name="Test Takers", 
+                    labels = c("Above Avg", "Below Avg"), 
+                    values = c("above"="#00ba38", "below"="#f8766d")) + 
+  labs(subtitle="Normalised count of AP Test Takers by School", 
+       title= "Diverging Bars",
+       y="Normalized count", 
+       x="By School (Names Not Listed)" ) + 
+  theme(axis.text.y=element_blank(), axis.ticks = element_blank(), legend.position = "bottom") +
+  coord_flip()
+```
+
+Again, the diverging barchart is selected to represent the disparity in the number of high schools above the mean value of total exams taken per high school with the majority of the high schools following below the mean.
+
+```{r analyze-data-4, fig.width=10,fig.height=8}
+# Total Exams Taken
+exams_taken_cnt <- school_level_results_long %>% filter(Category == "Total Exams Taken")
+
+exams_taken_cnt$zed <- round((exams_taken_cnt$Frequency - mean(exams_taken_cnt$Frequency))/sd(exams_taken_cnt$Frequency), 2)
+exams_taken_cnt$type <- ifelse(exams_taken_cnt$zed < 0, "below", "above")  # above / below avg flag
+exams_taken_cnt <- exams_taken_cnt[order(exams_taken_cnt$zed), ]  # sort
+# convert to factor to retain sorted order in plot.
+exams_taken_cnt$SchoolName <- factor(exams_taken_cnt$SchoolName, levels = exams_taken_cnt$SchoolName) 
+
+# Diverging Barcharts
+ggplot(exams_taken_cnt, aes(x=SchoolName, y=zed, label=zed)) + 
+  geom_bar(stat='identity', aes(fill=type), width=.5)  +
+  scale_fill_manual(name="Exams Taken", 
+                    labels = c("Above Avg", "Below Avg"), 
+                    values = c("above"="#00ba38", "below"="#f8766d")) + 
+  labs(subtitle="Normalised count of Exams Taken by School", 
+       title= "Diverging Bars",
+       y="Normalized count", 
+       x="By School (Names Not Listed)" ) + 
+  theme(axis.text.y=element_blank(), axis.ticks = element_blank(), legend.position = "bottom" ) +
+  coord_flip()
+```
+
+Finally, the below attempt at analysis through visualization admittedly falls woefully short of clear and concise, but I left the chart in the submission as an exercise in trial and error in trying to understand the art of the possible with the different types of plots and charts available from the ggplot2 package. The below diverginng lollipop chart, similar to above, captures the normalized mean of the good test score counts by school distinguished by the schools above and below the mean. The lollipop nature of the chart provides the calculated normalized mean for each school in the black circle at the end of each bar. Due to this inclusion of the value, the chart is set to a height of 25 to make the numbers readable. That being said, the height of the chart then becomes unweildy as any typical user would have to scroll to see the entirety of the chart. The chart also proves less than ideal as many of the values at the bottom of the chart are redundant.
+
+Despite the poor visual nature of the chart, the chart again does highlight the disparity in which less than a quarter of the New York City high schools carry the mean value to a height distanced from a majority of the high schools included in the analysis.
+
+```{r analyze-data-5, fig.width=10,fig.height=25}
+# Data Prep
+# High test scores count
+high_scores_cnt <- school_level_results_long %>% filter(Category == "Number of Exams with scores 3 4 or 5")
+
+high_scores_cnt$zed <- round((high_scores_cnt$Frequency - mean(high_scores_cnt$Frequency))/sd(high_scores_cnt$Frequency), 2)
+high_scores_cnt$type <- ifelse(high_scores_cnt$zed < 0, "below", "above")  # above / below avg flag
+high_scores_cnt <- high_scores_cnt[order(high_scores_cnt$zed), ]  # sort
+# convert to factor to retain sorted order in plot.
+high_scores_cnt$SchoolName <- factor(high_scores_cnt$SchoolName, levels = high_scores_cnt$SchoolName) 
+
+
+# Diverging Lollipop Chart
+ggplot(high_scores_cnt, aes(x=SchoolName, y=zed, label=zed)) + 
+  geom_point(stat='identity', fill="black", size=6)  +
+  geom_segment(aes(y = 0, 
+                   x = SchoolName, 
+                   yend = zed, 
+                   xend = SchoolName), 
+                   color = "black") +
+  geom_text(color="white", size=2) +
+  labs(title="Diverging Lollipop Chart", 
+       subtitle="Normalised count of Good Exam Scores by School",
+       y="Normalized count", 
+       x="By School (Names Not Listed)" ) +  
+  theme(axis.text.y=element_blank(), axis.ticks = element_blank(), legend.position = "bottom" ) +
+  coord_flip()
+```
+
+# Conclusion
+
+Upon initial inspection of the data, the mean count of AP test takers, exams taken, and good test scores per school would indicate a potentially high participation rate in AP test taking across the 233 New York City high schools considered in the analysis. With closer inspection of the provided data, the mean value of the three aforementioned categories proves unrealiable as less than a quarter of the considered high schools participate at levels at or above the mean values. The plot of data on the divering barchart clearly demonstrates the disparity in participation across the 233 high schools. The violin plot of the three categories also indicates the majority of the participation is at or near zero for many high schools.

@@ -1,0 +1,215 @@
+---
+title: "DATA 607 Project 2 Part II"
+author: "Philip Tanofsky"
+date: "3/7/2020"
+output: html_document
+---
+
+# Introduction
+
+In Part II of the Project 2, the assignment presents the effort to tidy the CSV file suggested by myself based on coronoavirus data at https://github.com/CryptoKass/ncov-data/blob/master/world.latest.bno.csv from roughly a month ago. The initial CSV required multiple steps to perform a proper tidy and clean of the data.
+
+The analysis of the input data attempts to depict an accurate portrayal of the coronavirus spread and the condition for each of the reported cases. The analysis eliminates the statistics from China to allow for focus on the additional countries with reported cases of coronavirus based on the last file update occuring 25 days prior to March 8, 2020.
+
+```{r read-csv-file}
+library(tidyr)
+library(dplyr)
+library(RCurl)
+library(stringi)
+library(ggplot2)
+
+# Load the csv file from the repo's URL
+coronavirus_data_url <- getURL("https://raw.githubusercontent.com/CryptoKass/ncov-data/master/world.latest.bno.csv")
+cnv_raw <-data.frame(read.csv(text=coronavirus_data_url, header=T))
+
+# Remove first column, as it's just a numeric placeholder
+
+# Remove 'links' column, too, as this is information not valueable to processing in R
+cnv_raw <- subset(cnv_raw, select = c("country", "cases", "deaths", "notes"))
+```
+
+# Tidy the Data
+
+The input file contains potentially several values in the 'notes' column which identifies the number of reported cases in critical, serious, or recovered condition. The initial steps to tidy the data require separating these values into respective columns for each condition. As many of the countries do not have a count for all three conditions, a default value of zero is set for those unreported counts by condition. The three condition columns are then converted to integer to ensure proper analysis on the ordinal counts. Finally, the three condition columns and the inital column of 'deaths' are melted into one columnd 'Condition' as each condition represents an observation per country.
+
+```{r tidy-data}
+# Need to make the data in the 'notes' column uniform before separating
+
+# Trying to be clever and use separate and not iterate through each row, this is my attempt
+# Use regular expressions to separate on multiple characters:
+
+# Create column for 'critical' and leave the remaining data in *_Remain column
+cnr_raw_crit <- cnv_raw %>% separate(notes, c("critical","Crit_Remain"), sep = "ical, |ical", fill = "left")
+
+# Because the value still contains characters, perform regex to extract just the number
+cnr_raw_crit$critical <- stri_extract_first_regex(cnr_raw_crit[["critical"]], "[0-9]+")
+
+# Create column for 'serious' and leave the remaining data in *_Remain column
+cnr_raw_seri <- cnr_raw_crit %>% separate(Crit_Remain, c("serious","Seri_Remain"), sep = "ous, |ous", fill = "left")
+
+# Because the value still contains characters, perform regex to extract just the number
+cnr_raw_seri$serious <- stri_extract_first_regex(cnr_raw_seri[["serious"]], "[0-9]+")
+
+# Create column for 'recovered' and leave the remaining data in 'Remaining' column
+cnr_raw_wide <- cnr_raw_seri %>% separate(Seri_Remain, c("recovered","Remaining"), sep = "ered", fill = "left")
+
+# Because the value still contains characters, perform regex to extract just the number
+cnr_raw_wide$recovered <- stri_extract_first_regex(cnr_raw_wide[["recovered"]], "[0-9]+")
+
+# Remove final column 'Remaining' as it is now extraneous
+cnr_raw_wide <- subset(cnr_raw_wide, select = -`Remaining`)
+
+# Set the default value to zero (0) for any values missing data
+cnr_raw_wide[is.na(cnr_raw_wide)] <- 0
+
+# For the 3 newly created columns that only contain integers, set the data type to integer
+cnr_raw_wide[, c("critical", "serious", "recovered")] <- sapply(cnr_raw_wide[, c("critical", "serious", "recovered")], as.integer)
+
+cnr_raw_long <- cnr_raw_wide %>% 
+  pivot_longer(c(`deaths`, `critical`, `serious`, `recovered`), names_to = "Condition", values_to = "Frequency", values_drop_na = TRUE)
+
+head(cnr_raw_long)
+```
+
+# Visualize the Data
+
+In an attempt to understand the severity of the virus, I created an extra column by way of mutation to calculate the percentage of each condition for each country. The plot represents the percentage of recovered cases from all the countries reporting cases of coronavirus. With several countries reaching 100 percent recovered, the containment of the virus appears promising.
+
+```{r visualize-data-1, fig.width=10,fig.height=8}
+cnr_raw_long <- mutate(cnr_raw_long,
+  Condition_Pct = Frequency / cases * 100,
+) 
+
+cnr_recv_pct <- cnr_raw_long %>% filter(Condition == "recovered") %>% arrange(desc(Condition_Pct))
+
+# Plot the percentages of recovered cases by country
+gg1 <- ggplot(data=cnr_recv_pct, aes(x=country, y=Condition_Pct)) +
+      geom_bar(stat="identity") +
+      theme(legend.position="bottom")
+gg1 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Country Vs Percent of Recovered Cases", 
+       y="Percent of Recovered Cases", 
+       x="Country", 
+       title="Bar Plot")
+```
+
+Conversely, the below plot captures the percentage of cases resulting in death from all the countries reporting cases of coronavirus. The Phillippines indicates a percentage of greater than 30 while China and Hong Kong reach indicate a percentage around 2 percent. With the majority of the countries not reporting any deaths, the virus oubreak does appear contained to just a few countries.
+
+```{r visualize-data-1.5, fig.width=10,fig.height=8}
+cnr_death_pct <- cnr_raw_long %>% filter(Condition == "deaths") %>% arrange(desc(Condition_Pct))
+
+# Plot the percentages of cases ending in death by country
+gg2 <- ggplot(data=cnr_death_pct, aes(x=country, y=Condition_Pct)) +
+      geom_bar(stat="identity") +
+      theme(legend.position="bottom")
+gg2 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Country Vs Percent of Death Cases", 
+       y="Percent of Death Cases", 
+       x="Country", 
+       title="Bar Plot")
+```
+
+In an attempt to purely plot the reported conditions by country, the below plot presents the condition frequency counts stacked. As China has so many reported cases, the height of the bar for China negates any value in the plot.
+
+```{r visualize-data-2, fig.width=10,fig.height=8}
+# Plot the conditions by country including China
+p1 <- ggplot(data=cnr_raw_long, aes(x=country, y=Frequency, fill=Condition)) +
+      geom_bar(stat="identity") +
+      theme(legend.position="bottom")
+p1 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Country Vs Condition Frequency", 
+       y="Condition Frequency", 
+       x="Country", 
+       title="Bar Plot")
+```
+
+In order to focus on the remaining countries, the rows for China are excluded in the plot to present the condition frequency counts stacked by country. The resulting plot identifies the reported conditions in a form that allows for clearer visual comparison between countries with China excluded. With many countries' bars indicating a number of recovered cases, again the potential outbreak of the virus appears limited.
+
+```{r visualize-data-3, fig.width=10,fig.height=8}
+# Countries besides China
+cnr_wo_china <- cnr_raw_long %>% filter(country != "China") %>% arrange(desc(cases))
+
+# Plot the conditions by country excluding China
+p2 <- ggplot(data=cnr_wo_china, aes(x=country, y=Frequency, fill=Condition)) +
+      geom_bar(stat="identity") +
+#      scale_x_discrete(labels = c('Test Takers','High Scores','Total Taken')) +
+      theme(legend.position="bottom")
+p2 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Country Vs Condition Frequency excluding China", 
+       y="Condition Frequency", 
+       x="Country", 
+       title="Bar Plot")
+```
+
+The box plot displays the frequency counts by condition regardless of country. The recovered boxplot clearly denotes the higher counts over critical, deaths, and serious.
+
+```{r visualize-data-4, fig.width=10,fig.height=8}
+# Basic box plot
+p3 <- ggplot(cnr_wo_china, aes(x=Condition, y=Frequency)) + 
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4) +
+  labs(subtitle="Condition Vs Frequency Count excluding China", 
+       y="Count", 
+       x="Condition", 
+       title="Box Plot")
+p3
+```
+
+# Analyze the Data
+
+Based on the visualization plots, I did not believe the plots capture the full breadth of the reported virus cases. As the initial provided data includes the number of cases by country, I performed the calculation to determine the number of unknown cases per country given the assumption that all cases not identified as deaths, critical, serious, or recovered, would then be deemed unknown. With the inclusion of unknown counts, the plots appear to show a different understanding of the potential outbreak not captured above.
+
+```{r analyze-data-1, fig.width=10,fig.height=8}
+# Create column for 'unknown' condition based on mutation transformation
+cnr_raw_wide <- mutate(cnr_raw_wide,
+  unknown = cases - deaths - critical - serious - recovered)
+
+cnr_raw_long <- cnr_raw_wide %>% 
+  pivot_longer(c(`deaths`, `critical`, `serious`, `recovered`, `unknown`), names_to = "Condition", values_to = "Frequency", values_drop_na = TRUE)
+
+head(cnr_raw_long)
+```
+
+The bar plot displays the condition frequency counts stacked by country, now with unknown included. For clarity's sake, again China is excluded from this plot to allow for clearer representation of the other impacted countries. The bar plot indicates most countries with reported cases of the virus actually have some number of cases in an unknown condition. The plot shows Japan with an unknown count over 200 cases. The plot also shows several other east Asian countries in near proximity to China having higher count of cases with unknown conditions. By adding the unknown condition, this plot more accurately portrays the volume of reported virus cases around the world.
+
+```{r analyze-data-2, fig.width=10,fig.height=8}
+# Remove China as before
+cnr_wo_china <- cnr_raw_long %>% filter(country != "China") %>% arrange(desc(cases))
+
+cnr_wo_china$country <- as.character(cnr_wo_china$country)
+#Then turn it back into a factor with the levels in the correct order
+cnr_wo_china$country <- factor(cnr_wo_china$country, levels=unique(cnr_wo_china$country))
+
+p2 <- ggplot(data=cnr_wo_china, aes(x=country, y=Frequency, fill=Condition)) +
+      geom_bar(stat="identity") +
+      theme(legend.position="bottom")
+p2 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Country Vs Condition Frequency excluding China", 
+       y="Condition Frequency", 
+       x="Country", 
+       title="Bar Plot") + coord_flip()
+```
+
+In contrast to the box plot presented without the unknown cases, the boxplot with the condition unknown included indicates the volume of unknown cases outpaces the other four conditions. With the box plot displaying the frequency counts by condition regardless of country, the plot makes clear that the unknown cases, which are not included in the provided data, make up the bulk of cases in countries. In an effort to focus attention on the boxes of the box plot, the lower and upper whiskers are computed and from those calculations the y limits of the Cartesian coordinates are scaled to more clearly display the boxes and the mean values represented as diamonds. Again, China was excluded from this plot as to be an extreme outlier to the data.
+
+```{r analyze-data-3, fig.width=10,fig.height=8}
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(cnr_wo_china$Frequency)$stats[c(1, 5)]
+
+# Basic box plot
+p3 <- ggplot(cnr_wo_china, aes(x=Condition, y=Frequency)) + 
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4) +
+  labs(subtitle="Condition Vs Frequency Count excluding China", 
+       y="Frequency Count", 
+       x="Condition", 
+       title="Box Plot")
+p4 = p3 + coord_cartesian(ylim = ylim1*7)
+
+# Display plot
+p4
+```
+
+# Conclusion
+
+In conclusion, the provided data (even though outdated) did not accurately represent the condition of all the cases of the reported coronavirus. Upon initial inspection, the percentages and counts of recovered cases present visualizations that indicate promising containment of the virus. In conjunction, the initial depiction of death counts made the outbreak appear focuses to just a few countries. Realizing the provided data gave the overall counts without the complete breakdown of conditions, the introduction of the unknown condition was required to given a more accurate portrayal of the reported virus cases. With the unknown condition in consideration, the plots portrayed an understanding of the spread of the virus in which most instances the condition of the case is unknown.

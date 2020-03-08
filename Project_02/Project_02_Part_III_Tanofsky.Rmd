@@ -1,0 +1,212 @@
+---
+title: "DATA 607 Project 2 Part III"
+author: "Philip Tanofsky"
+date: "3/7/2020"
+output: html_document
+---
+
+# Introduction
+
+In Part III of the Project 2, the assignment presents the effort to tidy the CSV file suggested by colleague Justin Hsi based on the Medium article at https://medium.com/analytics-vidhya/untidy-data-a90b6e3ebe4c. The initial CSV required multiple steps to perform a proper tidy of the data along with the creation of two separate tables. The analysis of the input data attempts to identify the highest and lowest performing students in addition to identifying the student with the most improvement.
+
+```{r read-csv-file}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(RCurl)
+library(stringr)
+library(stringi)
+library(gridExtra)
+
+# Load the csv file from the repo's URL
+student_results_url <- getURL("https://gist.githubusercontent.com/Kimmirikwa/b69d0ea134820ea52f8481991ffae93e/raw/4db7b1698035ee29885d10e1a59bd902716ae168/student_results.csv")
+student_results_raw <-data.frame(read.csv(text=student_results_url, header=T))
+
+student_results_raw
+```
+
+# Tidy the Data
+
+First step is to split the column 'sex.and.age' into separate columns, as two values in one column does not meet the definition of tidy.
+
+```{r split-column}
+# Split column for sex and age
+
+stu_res <- student_results_raw %>% separate(sex.and.age, c("sex","age"), sep = "_")
+
+stu_res
+```
+
+Next step is to melt the columns 'term1', 'term2', and 'term3' into a single column as those three columns represent one variable 'term', and thus should be a single column according to the definition of tidy data.
+
+```{r melt-columns}
+
+# Melt the 3 columns for term1, term2, term3
+stu_res_long <- stu_res %>% 
+  pivot_longer(c(`term.1`, `term.2`, `term.3`), names_to = "term", values_to = "result", values_drop_na = TRUE)
+
+# Remove 'term' from the value, so the number of the term remains
+stu_res_long$term <- stri_extract_first_regex(stu_res_long[["term"]], "[0-9]+")
+
+stu_res_long$test.number <- str_replace_all(stu_res_long$test.number, ' ', '.')
+
+stu_res_long
+```
+
+With the understanding of one row should be one observation, the 'test 1' and 'test 2' values represent variables for the single oberservation of one student's results for one term. A pivot wider is performed to make each test result a single variable, and thus a single column each.
+
+```{r pivot-wide-test-variables}
+# Pivot wider to make the Test1 and Test2 variables
+stu_res_wide <- stu_res_long  %>%
+    pivot_wider(names_from = test.number, values_from = result)
+
+stu_res_wide
+```
+
+The form of the table now contains redundant information across two observations. One observation is the student and identifying features of the student.
+
+```{r create-student-observation-table}
+# Create dataframe to represent the students (1 observation)
+students_raw <- stu_res_wide %>% select(id:age)
+
+# Dedupe the replicated rows of students
+students_raw <- unique( students_raw[ , 1:5 ] )
+
+# Final dataframe of the student observations
+students_raw
+```
+
+The second observation is the student's result for one term.
+
+```{r create-results-observation table}
+# Create dataframe to represent the students' results per term (1 observation)
+results_raw <- stu_res_wide %>% select(-(name:age))
+
+# Final dataframe of the students' results observations 
+results_raw
+```
+
+# Visualize the Data
+
+With the data in a tidy form, the visualization step presents the performance of the students for each term in the form of a bar plot. The bar plots for Term 1 and Term 2 are presented side-by-side to allow for clear visualization of the relative performance between students for each term along with performance from Term 1 to Term 2.
+
+```{r visualize-students-results}
+# Plot
+p1 <- ggplot(data=results_raw, aes(x=id, y=test.1, fill=term)) +
+      geom_bar(stat="identity", position=position_dodge()) +
+      theme(legend.position="bottom") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Student Vs Test 1 Result by Term", 
+       y="Test 1 Result", 
+       x="Student ID", 
+       title="Bar Plot")
+
+p2 <- ggplot(data=results_raw, aes(x=id, y=test.2, fill=term)) +
+      geom_bar(stat="identity", position=position_dodge()) +
+      theme(legend.position="bottom") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Student Vs Test 2 Result by Term", 
+       y="Test 2 Result", 
+       x="Student ID", 
+       title="Bar Plot")
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+# Analyze the Data
+
+To analyze the data, an additional column is calculated to capture the test result average by term for each student. The term average for each student is presented to help visually identify the higher and lower performing students along with a clear method to see which students show positive or negative change from Term 1 to Term 3. The goal of the analysis is to identify the highest and lowest performing student in addition to the student with the highest improvement from start to finish.
+
+```{r analyze-students-results}
+# Adding column for average by term
+results_with_avg <- results_raw %>% mutate(
+    term.avg = (test.1 + test.2) / 2
+)
+results_with_avg
+
+p3 <- ggplot(data=results_with_avg, aes(x=id, y=term.avg, fill=term)) +
+      geom_bar(stat="identity", position=position_dodge()) +
+      theme(legend.position="bottom")
+p3 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Student Vs Term Average by Term", 
+       y="Term Average", 
+       x="Student ID", 
+       title="Bar Plot")
+
+```
+
+In an exercise to determine the highest performing term by the students, the terms are grouped and an average calculated for each term. The box plot below presents the overall students' performance by term. The dots are added on the box plot to mark each of the student averages for the given term. As only five students participated in this study, the red dots line up with the elements of each box: median, whiskers, and upper and lower quartile.
+
+```{r analysis-by-term}
+by_term_avg <- group_by(results_with_avg, term)
+summarise(by_term_avg, overall_term_avg = mean(term.avg, na.rm = TRUE))
+
+# Basic box plot by Term
+p4 <- ggplot(results_with_avg, aes(x=term, y=term.avg)) + 
+  geom_boxplot() +
+  geom_dotplot(binaxis='y', 
+               stackdir='center', 
+               dotsize = .5, 
+               fill="red") +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4)
+p4 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(subtitle="Term Vs Term Average", 
+       y="Term Average", 
+       x="Term", 
+       title="Box + Dot Plot")
+```
+
+
+Back to the students' performance, the box plot below captures each student's performance by term average. This plot clearly shows which student had the highest average across the three terms (Student 2) along with which student had the lowest average across the three terms (Student 5). The diamond for each student marks the overall average of the student's results. The red dots identify the term average for each term by student. The highest term average was earned by Student 1. This diagram captures a great snapsnot of the students' performance by term to give a robust view of the underlying data.
+
+```{r analysis-by-student}
+by_student_avg <- group_by(results_with_avg, id)
+summarise(by_student_avg, overall_avg = mean(term.avg, na.rm = TRUE))
+
+# Basic box plot with dot plot by Student
+p5 <- ggplot(results_with_avg, aes(x=id, y=term.avg, group=id)) + 
+  geom_boxplot() +
+  geom_dotplot(binaxis='y', 
+               stackdir='center', 
+               dotsize = .5, 
+               fill="red") +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=4)
+p5 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(subtitle="Student Vs Term Average", 
+       y="Term Average", 
+       x="Student ID", 
+       title="Box + Dot Plot")
+```
+
+In an effort to determine the student with the most improvement, the tidy table is pivoted wide to include each student's term average as a variable. This un-tidy modification is made to then calculate the delta for each student between the Term 1 average and the Term 3 average. The resulting delta for each student denotes which student showed the most improvement. The bar plot below identifies Student 1 as having the greatest positive change in term averages from Term 1 to Term 3. Interestingly, even though Student 2 earned the highest overall average across the three terms, Student 2 shows lack of improvement from Term 1 to Term 3 in regards to test results.
+
+```{r analysis-student-delta}
+# Which student improved the most from term 1 to term 3
+
+results_term_avg_only <- results_with_avg %>% select(-(test.1:test.2))
+
+results_term_avg_only$term <- paste("term.", results_term_avg_only$term, sep = "")
+
+results_term_avg_only <- results_term_avg_only  %>%
+    pivot_wider(names_from = term, values_from = term.avg)
+
+results_term_delta  <- results_term_avg_only %>% mutate(
+    term.delta = (term.3 - term.1)
+)
+
+results_term_delta
+
+p6 <- ggplot(data=results_term_delta, aes(x=id, y=term.delta)) +
+      geom_bar(stat="identity", position=position_dodge()) +
+      theme(legend.position="bottom")
+p6 + theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(subtitle="Student Vs Result Delta", 
+       y="Result Delta", 
+       x="Student ID", 
+       title="Bar Plot")
+```
+
+
+# Conclusion
+
+In conclusion, the visualization and analysis of the provided student data demonstrates Student 2 is the highest performing student across the three terms while Student 3 is the lowest performing student across the three terms. The tidy and dplyr packages were valuable tools in order to transform the data that allowed for easy identification of ther students' performances while also identifying which students show improvement or not from Term 1 to Term 3. Overall, though the input data is small, the challenge to rectify the input into tidy forms did require several techniques to ensure the data matched the definition of Tidy Data.
