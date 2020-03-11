@@ -1,0 +1,165 @@
+---
+title: "DATA 607 Presentation"
+subtitle: "Data Science in Context: Decision Stump"
+author: Philip Tanofsky
+section: CUNY Spring 2020
+date: "March 11, 2020"
+output: ioslides_presentation
+---
+
+
+## Evaluating a Model
+
+Important to consider carefully what would be a reasonable baseline against which to compare model performance.
+
+Baselines approaches for classification tasks
+
+- Majority classifier: Naive classifier that always chooses the majority class of the training dataset
+- Decision Stump: Decision tree with only one internal node, the root node
+
+## Decision Stump
+
+Tree induction selects the single most informative feature to make a decision.
+
+Very Simple Classification Rules Perform Well on Most Commonly Used Datasets, Robert Holte (1993)
+
+The specific kind of rules examined in this article, called "1-rules," are rules that classify an object on the basis of a single attribute (i.e., they are 1-level decision trees). 
+
+Not all real-world problems are hard problems, and thus a naive classification task could prove valuable.
+
+When measuring the value of an algorithm, consider the actual cost of processing and data collection, as a simple classifier algorithm could be financially more beneficial given all costs.
+
+## Weka Algorithms
+
+**DecisionStump** implements decision stump classification (trees with a single split only), which are frequently used as base learners for meta learners such as Boosting.
+
+- For non-binary classification, a stump with the two leaves, one of which corresponds to some chosen category, and the other leaf to all the other categories
+
+**InfoGainAttributeEval** evaluates the worth of an attribute by measuring the information gain with respect to the class.
+
+- Feature selection task that contributes to decreasing the overall entropy.
+
+## Dataset
+
+Population: Individuals with accepted credit card applications
+
+Target variable: Defaulted (Yes or No)
+
+Input variables:
+
+<font size="3">
+
+- Age = Age in years plus twelfths of a year
+
+- Adepcnt = 1 + number of dependents
+
+- Acadmos = months living at current address
+
+- Majordrg = Number of major derogatory reports
+
+- Minordrg = Number of minor derogatory reports
+
+- Ownrent = 1 if owns their home, 0 if rent
+
+- Income = Monthly income (divided by 10,000)
+
+- Selfempl = 1 if self employed, 0 if not
+
+- Inc_per = Income divided by number of dependents
+
+- Exp_Inc = Ratio of monthly credit card expenditure to yearly income
+
+</font>
+
+## R Code Snippet {.smaller}
+
+Code chunk highlights the libraries RWeka and pROC 
+along with functions DecisionStump and InfoGainAttributeEval
+
+```{r code-snippet, eval=FALSE, echo=TRUE}
+library(RWeka)
+library(pROC)
+
+# Weka tree classifier: Decision Stump
+stump <- DecisionStump(fml, data = train)
+roc2 <- roc(as.factor(test$DEFAULT), 
+            predict(stump, newdata = test, type = "probability")[, 2])
+# Area under the curve: 0.5947
+
+# Weka attribute selection
+imp <- InfoGainAttributeEval(fml, data = train)
+imp_x <- test[, names(imp[imp == max(imp)])]
+roc1 <- roc(as.factor(test$DEFAULT), imp_x)
+# Area under the curve: 0.6338
+
+ggroc(list(Predictive.Attr=roc1, Decision.Stump=roc2), 
+      aes="linetype", color="blue", legacy.axes = FALSE)
+```
+
+Classifiers selected **Income** as the input attribute resulting in similar performance.
+
+<font size="2">Source: https://statcompute.wordpress.com/2016/01/01/the-power-of-decision-stumps/</font>
+
+```{r, include=FALSE}
+library(RWeka)
+library(pROC)
+
+pkgs <- c('pROC', 'RWeka')
+lapply(pkgs, require, character.only = T)
+df1 <- read.csv("credit_count.csv")
+df2 <- df1[df1$CARDHLDR == 1, ]
+set.seed(2016)
+n <- nrow(df2)
+sample <- sample(seq(n), size = n / 2, replace = FALSE)
+train <- df2[sample, ]
+test <- df2[-sample, ]
+x <- paste("AGE + ACADMOS + ADEPCNT + MAJORDRG + MINORDRG + OWNRENT + INCOME + SELFEMPL + INCPER + EXP_INC")
+fml <- as.formula(paste("as.factor(DEFAULT) ~ ", x))
+ 
+### IDENTIFY THE MOST PREDICTIVE ATTRIBUTE ###
+imp <- InfoGainAttributeEval(fml, data = train)
+imp_x <- test[, names(imp[imp == max(imp)])]
+roc1 <- roc(as.factor(test$DEFAULT), imp_x)
+# Area under the curve: 0.6243
+ 
+### CONSTRUCT A WEAK CLASSIFIER OF DECISION STUMP ###
+stump <- DecisionStump(fml, data = train)
+print(stump)
+roc2 <- roc(as.factor(test$DEFAULT), predict(stump, newdata = test, type = "probability")[, 2])
+# Area under the curve: 0.5953
+```
+
+## AUC - ROC Curve {.smaller}
+
+AUC: Area Under Curve -- ROC: Receiver Operating Characteristics curve
+
+```{r build-plot, include=FALSE}
+g2 <- ggroc(list(Decision.Stump=roc2, Info.Gain.Attr.Eval=roc1), aes="linetype", color="blue", legacy.axes = TRUE)
+```
+
+```{r display-plot, echo=FALSE}
+g2
+```
+
+<font size="3">DecisionStump AUC: 0.5947 -- InfoGainAttributeEval AUC: 0.6338</font>
+
+
+
+
+
+Info Gain Attribute Evaluation algorithm outperforms the Decision Stump algorithm
+
+
+Sensitivity = True Positive Rate
+
+1 - Specificity = False Positive Rate
+
+AUC is 0.7, it means there is 70% chance that model will be able to distinguish between positive class and negative class.
+
+## Conclusion
+
+Data-driven model requires valid comparison in order to evaluate performance.
+
+Decision Stump can provide a reasonable baseline for classification tasks.
+
+A simple classification task may prove feasible compared to more complex classifier algorithms.
