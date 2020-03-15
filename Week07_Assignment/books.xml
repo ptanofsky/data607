@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<books>
+	<book>
+		<title>Moneyball</title>
+		<subtitle>The Art of Winning an Unfair Game</subtitle>
+		<authors>
+			<author>Michael Lewis</author>
+		</authors>
+		<publishers>
+			<publisher>W. W. Norton &amp; Company</publisher>
+		</publishers>
+		<year_published>2003</year_published>
+		<pages>288</pages>
+		<isbn>978-0-393-05765-2</isbn>
+	</book>
+	<book>
+		<title>Freakonomics</title>
+		<subtitle>A Rogue Economist Explores the Hidden Side of Everything</subtitle>
+		<authors>
+			<author>Steven D. Levitt</author>
+			<author>Stephen J. Dubner</author>
+		</authors>
+		<publishers>
+			<publisher>William Morrow</publisher>
+		</publishers>
+		<year_published>2005</year_published>
+		<pages>336</pages>
+		<isbn>0-06-123400-1</isbn>
+	</book>
+	<book>
+		<title>Capital in the Twenty-First Century</title>
+		<subtitle/>
+		<authors>
+			<author>Thomas Piketty</author>
+		</authors>
+		<publishers>
+			<publisher>Éditions du Seuil</publisher>
+			<publisher>Harvard University Press</publisher>
+		</publishers>
+		<year_published>2013</year_published>
+		<pages>696</pages>
+		<isbn>978-0674430006</isbn>
+	</book>
+</books>
