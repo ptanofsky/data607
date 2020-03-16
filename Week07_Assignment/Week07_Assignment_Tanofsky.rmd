@@ -1,0 +1,64 @@
+---
+title: "DATA 607 Week 07 Assignment"
+author: "Philip Tanofsky"
+date: "3/14/2020"
+output: html_document
+---
+
+# Introduction
+
+This assignment presents the conversion of three common file types of data - XML, JSON, and HTML - into an R dataframe. The results are largely based on Google searches to find code examples and R documentation on the libraries capable of performing the different conversions. Each source file containing bibliographic descriptions of the same three books was created by hand by the assignment's author.
+
+# Read XML
+
+The XML file to R dataframe conversion below uses the 'XML' library. Another R library, 'xml2', would also have been able to perform the conversion based on documentation, but after several attempts of trial and error, the 'XML' library code proved simpler.
+
+The resulting dataframe converted the three book entries into three rows (observations) with seven columns (variables). The book with two authors, Freakonomics, and the book with two publishers, Capital, did produce a single concatenated string entry combining the separate values. For example, the author column for Freakonomics resulted in "Steven D. LevittStephen J. Dubner" which is the concatenation of the two authors name. In order to tidy this data, I would recommend introducing a delimiter in the author field to allow for tidyr functions to separate out the author entries appropriately. Otherwise, the conversion of XML to R dataframe proved relatively simple and accurate.
+
+```{r read-xml}
+library(XML)
+library(RCurl)
+
+url <- "https://raw.githubusercontent.com/ptanofsky/data607/master/Week07_Assignment/books.xml"
+xml_url <- getURL(url)
+xml_doc <- xmlParse(xml_url)
+xml_df <- xmlToDataFrame(xml_doc)
+
+dim(xml_df)
+print(xml_df)
+```
+
+# Read JSON
+
+The JSON file to R dataframe conversion below uses the 'rjson' library. Based on the output below, the JSON conversion would require the most transformation and tidy-ing to construct a usable R dataframe. The resulting dataframe consists of just two rows and 21 columns. Instead of translating the JSON file containing an array of books into separate rows, the conversion appears to have created a second row to accommodate for the second author of Freakonomics and the second publisher of Capital. The documentation of JSON conversion reads in each list as a column, whereas the input JSON file contains each book entry as a separate array element. The use of tidy techniques, including melting, could transform the resulting dataframe into a more analysis-friendly structure.
+
+
+```{r read-json}
+library(rjson)
+
+json_url <- "https://raw.githubusercontent.com/ptanofsky/data607/master/Week07_Assignment/books.json"
+books_json_inp <- fromJSON(file = json_url)
+json_df <- as.data.frame(books_json_inp)
+
+dim(json_df)
+print(json_df)
+```
+
+# Read HTML
+
+The HTML file to R dataframe conversion below uses the 'rvest' library. Based on the output below, HTML conversion appears to be on par with the XML conversion. As in the XML example, the HTML to R dataframe results in three rows (observations) with seven columns (variables) just as the file denotes. Again, the two authors and two publishers proves a bit problematic in the resulting R dataframe. The two strings appear to be concatenated together with the white-space HTML characters included in the output, too. The overall structure of the R dataframe meets expectations but does require transformation to parse the fields with two concatenated values. A delimiter could be used in these scenarios to allow for easier transformations with the 'dplyr' library. The resulting R dataframe is near analysis-ready based on the initial conversion of HTML to R dataframe.
+
+```{r read-html}
+library(rvest)
+
+html_url <- "https://raw.githubusercontent.com/ptanofsky/data607/master/Week07_Assignment/books.html"
+html_df <- as.data.frame(read_html(html_url) %>% html_table(fill=TRUE))
+
+dim(html_df)
+print(html_df)
+```
+
+# Conclusion
+
+The assignment proved an interesting exercise in data conversion when using R. Despite most raw input files coming in the form of CSV, raw data can come in many other common forms, including XML, JSON, and HTML. Libraries for the R language exist to provide relatively straightforward conversions of the raw input to R dataframes, but the conversion itself doesn't guarantee a tidy dataframe. The exercise outlines the different capabilities of the R libraries and the incongruent results of simply converting to a dataframe. Additional transformations and tidy-ing would be required to prepare these sample files for data analysis techniques and meaningful plots.
+
