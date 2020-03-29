@@ -1,0 +1,100 @@
+---
+title: "DATA 607 Week 9 Assignment"
+author: "Philip Tanofsky"
+date: "3/27/2020"
+output: html_document
+params: 
+  apiKey: "Enter API key enabled for NY Times Movie Reviews API"
+---
+
+# Introduction
+
+The New York Times web site provides a rich set of APIs, as described here: https://developer.nytimes.com/apis. Based on the example provided in the NY Times web site fro the movie reviews API, I have constructed an interface to read in the JSON data, and transform it into an R dataframe.
+
+**NOTE:** This R markdown file must be "Knit with Parameters" with a valid API key entered for the NY Times APIs to successfully respond. This file utilized the movie reviews API.
+
+```{r libraries-required, warning=FALSE}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+```
+
+## API Call
+
+With the API Key provided as a parameter, the API request is sent given the URI seen in the code. As the NY Times example showed, the following API request is for all movies reviewed by the NY Times during the decade of the 1980s with 'big' in the title.
+
+The response is checked to ensure a successful status was returned, or else the processing will stop. Also, if the response object is not JSON, the processing will stop.
+
+```{r ny-times-api, warning=FALSE}
+# Url to call for all movies with 'big' in the title for the decade of the 1980s
+url_base <- "https://api.nytimes.com/svc/movies/v2/reviews/search.json?query=big&opening-date=1980-01-01;1990-01-01&api-key="
+
+# Get API key from input parameter
+api_key <- params$apiKey
+
+# Concatenate the URL base with the api key
+url <- paste(url_base, api_key)
+
+# Make the GET request to the API resource 
+r <- GET(url)
+
+# Check the response status
+warn_for_status(r)
+stop_for_status(r)
+
+# Ensure response is json, if not, halt processing
+if (http_type(r) != "application/json") {
+  stop("API did not return json", call. = FALSE)
+}
+```
+
+# Process API Response
+
+From the API response object in JSON format, the response is converted to a list. From the overall response list, the results item is flattened to a list itself and then loaded into a dataframe.
+
+```{r parse-response, warning=FALSE}
+# Convert the JSON reponse to a list
+resp <- (fromJSON(content(r, "text"), simplifyVector = FALSE))
+
+# Just use the 'results' item from the list as that is where the meaningful data resides
+results <- resp$results
+
+# Flatten the list, as the links column is actually a list in a list
+results_flat <- do.call(rbind, results)
+
+# Convert the flattened list to a Dataframe
+df <- as.data.frame(results_flat)
+```
+
+# Transform Dataframe
+
+With the flattened results item list now in a dataframe format, the links column is transformed to remove the excess information and retain only the URL of the movie review. Initially, the links column was a list, so the transformation is required to ensure just the URL remains.
+
+```{r data-cleaning, warning=FALSE}
+# Clean up the link column because it was a list itself, and I only want to maintain the actual URL
+df <- df %>% separate(link, into = c("article", "link_url", "link_title"), sep = ",")
+
+# Remove unwanted columns after separating the initial link column
+df <- subset(df, select=-c(article,link_title))
+
+# Clean up link_url column
+# - Remove the 'url = ' text from each cell
+df <- df %>% separate(link_url, into = c("url", "link_url"), sep = " = ")
+df <- subset(df, select=-c(url))
+
+# Remove the extra quotes that still remain on the link value
+df$link_url <- gsub("\"", "", df$link_url)
+```
+
+# Output Dataframe
+
+Display the final dataframe of the movies reviewed by the NY Times in the 1980s with the word 'big' in the title.
+
+```{r output-results, warning=FALSE}
+# Output the final Dataframe
+df
+```
+
+# Conclusion
+
+In conclusion, the assignment was straightforward, and the NY Times developer site provided an easy step-by-step guide to creating a developer account in order to receive a valid API key. Using the Knit with Parameters was used in order to prevent the display of my personal API key in a public Github repo. This user-entered API key does make this file not immediately reproducible by another user, but still easy enough for another use to supply their own valid NY Times API key. The transformations of the JSON response to the dataframe were minimal as JSON already has a well-defined structure. Overall, a valuable exercise in using APIs for retrieving data from the RStudio platform.
