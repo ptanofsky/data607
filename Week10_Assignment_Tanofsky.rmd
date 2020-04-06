@@ -1,0 +1,529 @@
+---
+title: "DATA 607 Week 10 Assignment"
+author: "Philip Tanofsky"
+date: "4/5/2020"
+output: 
+  html_document:
+    code_folding: show
+    df_print: paged
+    toc: false
+    toc_float: true
+    toc_collapsed: true
+    smooth_scroll: false
+    toc_depth: 3
+number_sections: true
+theme: lumen
+---
+
+<div style="margin-bottom:50px;"></div>
+# Introduction {.tabset}
+
+This assignment performs the sentiment analysis of the novel "The Variable Man" by science-fiction author Philip K. Dick primarily using the Syuzhet lexicon. The Afinn lexicon is also used for comparison to the Syuzhet lexicon. The novel is available from the Gutenberg Project.
+
+### Libraries
+
+The following libraries are used for the Syuzhet analysis and the Chapter 2 examples.
+
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(janeaustenr)
+library(dplyr)
+library(stringr)
+library(tidytext)
+library(gutenbergr)
+library(syuzhet)
+library(ggplot2)
+library(tidyr)
+library(wordcloud)
+library(reshape2)
+```
+
+<div style="margin-bottom:50px;"></div>
+## The Variable Man using Syuzhet
+
+Retrieve the Syuzhet lexicon dictionary and output the first 5 rows to identify the type of analysis. The Syuzhet lexicon applies a numeric sentiment analysis to single words, similar to the Afinn approach.
+
+The Syuzhet package is sentiment analysis "for the extraction of sentiment and sentiment-based plot arcs from text." According to the authors of the package, the library aims to "reveal the emotional shifts that serve as proxies for the narrative movement between conflict and conflict resolution." (https://www.rdocumentation.org/packages/syuzhet/versions/1.0.4)
+
+```{r}
+syuzhet_dict <- get_sentiment_dictionary()
+
+head(syuzhet_dict)
+```
+
+Download the novel "The Variable Man" by Philip K. Dick from the Gutenberg Project using the functions from the gutenbergr library. To be honest, I'm not familiar with this novel, but being a Philip K. Dick fan, this was the longest piece by Dick available from the Gutenberg Project.
+
+The gutenberg_download separates each line of text into a single row of string text. After the download, tidy the novel while maintaining the line number of the word.
+
+```{r}
+
+# Download all the available Philip K. Dick pieces, novels and short stories.
+#pkd_books <- gutenberg_download(c(28554, 28644, 28698, 28767, 29132, 30255, 31516, 32032, 32154, 32522, 32832, 40964, 41562), meta_fields = "title")
+
+# 32154 is the ID for 'The Variable Man'
+variable_man <- gutenberg_download(c(32154), meta_fields = "title")
+
+variable_man
+
+variable_man_tidy <- variable_man %>%
+  group_by(title) %>%
+  mutate(linenumber = row_number()) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+```
+
+Calculate the sentiment of each line of the novel based on the Afinn lexicon.
+
+```{r}
+afinn_pkd <- variable_man_tidy %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(value)) %>%
+  mutate(method = "AFINN")
+
+afinn_pkd
+```
+
+Calculate the sentiment of each line of the novel based on the Syuzhet lexicon.
+
+```{r}
+syuzhet_pkd <- variable_man_tidy %>%
+  inner_join(get_sentiment_dictionary()) %>%
+  group_by(index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(value)) %>%
+  mutate(method = "SYUZH")
+
+syuzhet_pkd
+```
+
+Plot the sentiment analysis of the Afinn and Syuzhet lexicons by line for comparison. Overall, the two graphs are similar with peaks and valleys occurring at the same time in the novel's narrative. The Syuzhet plot does show a lower maximum of approximately 15 while the Afinn reaches 20. Also, the Syuzhet plot reaches more negative measurements, reaching -30, while the Afinn plot does not reach -30. 
+
+```{r}
+bind_rows(afinn_pkd,
+          syuzhet_pkd) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+### Binary approach to numeric sentiment analysis
+
+This section attempts to convert the numeric sentiment analysis of the Afinn and Syuzhet lexicons into a binary of positive and negative words for additional comparison.
+
+Perform inner join with the novel and the Syuzhet lexicon to identify the sentiment analysis of each meaningful word.
+
+Then mutate the resulting tibble to translate the sentiment analysis for each word into "positive" or "negative" based on the numeric rating.
+
+```{r}
+v_man_tidy_syuzh <- variable_man_tidy %>%
+  inner_join(get_sentiment_dictionary())
+
+v_man_tidy_syuzh
+
+v_man_tidy_syuzh <- v_man_tidy_syuzh %>% 
+  mutate(sentiment=cut(value, 
+                      breaks=c(-Inf, -0.001, 0.001, Inf), 
+                      labels=c("negative","neutral","positive")))
+
+syuzh_word_counts <- v_man_tidy_syuzh %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+syuzh_word_counts
+```
+
+Perform the same inner join with the novel and the Afinn lexicon to identify the sentiment analysis of each meaningful word.
+
+Again, mutate the resulting tibble to translate the sentiment analysis for each word into "positive" or "negative" based on the numeric rating.
+
+```{r}
+v_man_tidy_afinn <- variable_man_tidy %>%
+  inner_join(get_sentiments("afinn"))
+
+v_man_tidy_afinn
+
+v_man_tidy_afinn <- v_man_tidy_afinn %>% 
+  mutate(sentiment=cut(value, 
+                      breaks=c(-Inf, -0.001, 0.001, Inf), 
+                      labels=c("negative","neutral","positive")))
+
+afinn_word_counts <- v_man_tidy_afinn %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+afinn_word_counts
+```
+
+### Top 10 positive and negative words
+
+Plot the top 10 positive and negative words in the Dick novel based on the Syuzhet lexicon.
+
+```{r}
+syuzh_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+```
+
+Plot the top 10 positive and negative words in the Dick novel based on the Afinn lexicon.
+
+```{r}
+afinn_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+```
+
+**Findings:** The Syuzhet lexicon does not appear to identify the word 'no' as a negative word, which the Afinn lexicon does, thus the Syuzhet negative frequency count does not start with 'no', but instead 'war'. Another interesting finding, the Syuzhet lexicon identifies the words 'slowly' and 'police' as negative. On the positive plots, the Afinn lexicon results don't appear to contain any nouns, only adjectives and verbs. The Syuzhet lexicon identifies 'work' and 'council' as positive words. These plots show the differences in how lexicons identify positive and negative words.
+
+### Wordclouds
+
+Render a wordcloud for the positive and negative words of the novel based on the Syuzhet lexicon.
+
+```{r}
+syuzh_word_counts %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+Render a wordcloud for the positive and negative words of the novel based on the Afinn lexicon.
+
+```{r}
+afinn_word_counts %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+**Findings:** The wordclouds do not reveal anything too different than the top 10 word plots. Each wordcloud does appear to show more positive words in the bigger font size, indicating higher frequency.
+
+### Syuzhet Vignette
+
+The following analysis and plots using the Syuzhet lexicon sentiment analysis on the novel "The Variable Man" by Philip K. Dick follows the vignette at https://cran.r-project.org/web/packages/syuzhet/vignettes/syuzhet-vignette.html.
+
+Download the text of the novel from the Gutenberg Project using the syuzhet package function get_text_to_string. Tokenize the initial text download into sentences in a sentence vector. Output summary statistics of the sentence vector. Then tokenize the initial text of the book into words and perform the sentiment analysis based on the Syuzhet lexicon. Output summary statistics.
+
+```{r}
+# The Variable Man, by Philip K. Dick from the Gutenberg Project
+book <- get_text_as_string("http://www.gutenberg.org/cache/epub/32154/pg32154.txt")
+
+s_v <- get_sentences(book)
+
+class(s_v)
+
+str(s_v)
+
+head(s_v)
+
+book_v <- get_tokens(book, pattern = "\\W")
+
+syuzhet_vector <- get_sentiment(book_v, method="syuzhet")
+
+head(syuzhet_vector)
+
+sum(syuzhet_vector)
+
+mean(syuzhet_vector)
+
+summary(syuzhet_vector)
+```
+
+Plot the sentiment analysis for each word in order of appearance in the novel. The x axis tracks the narrative time from beginning to end, while the y axis measures the emotional valence of the word. As one can see, the below plot is extremely difficult to read due to the sheer volume of words in the novel. 
+
+```{r}
+p1 <- ggplot(data.frame(time = 1:length(syuzhet_vector), sentiment = syuzhet_vector),
+       aes(x = time, y = sentiment)) +
+  geom_line() + labs(title = "PK Dick Novel By Word", x = "Narrative Time", y = "Emotional Valence")
+p1
+```
+
+Plot the sentiment analysis based on an equal number of chunks or bins. The emotional valence for each of the 30 bins are calculated and then plotted again with narrative time as the x axis. This plot captures the emotional trajectory of the novel, remaining relatively neutral before reaching a valley approximately two-thirds into the novel followed by a peak at the conclusion.
+
+```{r}
+percent_vals <- get_percentage_values(syuzhet_vector, bins = 30)
+
+p2 <- ggplot(data.frame(time = 1:length(percent_vals), sentiment = percent_vals),
+       aes(x = time, y = sentiment)) + 
+  geom_line() + labs(title = "PK Dick Novel with Percentage-Based Means", x = "Narrative Time", y = "Emotional Valence")
+p2
+```
+
+Plot the sentimental analysis using a discrete cosine transformation (DCT). By using the DCT, the resulting plot is a smooth curve to provide a smoothed version of the emotional valence as compared to the above plot. The x and y axes remain the same across both plots to enable straightforward comparison.
+
+```{r}
+dct_values <- get_dct_transform(
+      syuzhet_vector, 
+      low_pass_size = 5, 
+      x_reverse_len = 100,
+      scale_vals = F,
+      scale_range = T
+      )
+
+p3 <- ggplot(data.frame(time = 1:length(dct_values), sentiment = dct_values),
+       aes(x = time, y = sentiment)) + 
+  geom_line() + labs(title = "PK Dick Novel with Transformed Values", x = "Narrative Time", y = "Emotional Valence")
+
+p3
+```
+
+Using the built-in function simple_plot, the sentiment vector of the sentences of "The Variable Man" is input to create three smoothing approaches. The approaches are a moving average, a loess, and a DCT, as seen in the first plot. The second plot only renders the DCT smoothed line on a normalized time axis.
+  
+```{r fig.height=8}
+syuzhet_vector_sentence <- get_sentiment(s_v, method="syuzhet")
+simple_plot(syuzhet_vector_sentence)
+```
+
+### Conclusion
+
+The Syuzhet package and lexicon provides a useful tool for measuring the sentiment or emotional valence for an entire body of work (or corpus). The package does use a numeric sentiment analysis to Afinn, and as noted, does have notable differences. The Syuzhet package does provide valuable functions to easily assess the sentiment trajectory of an entire corpus that can then be plotted cleanly on a graph. The gutenbergr packages was also very useful in the ability to download free ebooks from the catalog. The package provided several functions that abstracted some string manipulation required of raw input text.
+
+<div style="margin-bottom:50px;"></div>
+## Chapter 2 Sample
+
+This section follows the example of sentiment analysis using the tidytext library with Jane Austen novels from the austenr library.
+
+Reference: Chapter 2 of https://www.tidytextmining.com/sentiment.html
+
+### Sentiment analysis with inner join
+
+Tokenize all the words from the Jane Austen books.
+
+```{r}
+tidy_books <- austen_books() %>%
+  group_by(book) %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, regex("^chapter [\\divxlc]",
+                                                 ignore_case = TRUE)))) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+```
+
+Filter for the words for "joy" words based on the NRC lexicon in the novel Emma and output a table with the word frequency.
+
+```{r}
+nrc_joy <- get_sentiments("nrc") %>%
+  filter(sentiment == "joy")
+
+tidy_books %>%
+  filter(book == "Emma") %>%
+  inner_join(nrc_joy) %>%
+  count(word, sort = TRUE)
+```
+
+Using the Bing lexicon, separate the books into 80-line sections and measure the overall sentiment of the section. 
+
+```{r}
+jane_austen_sentiment <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(book, index = linenumber %/% 80, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+```
+
+Plot the 80-line sections of each novel by the overall sentiment, positive and negative.
+
+```{r}
+# library(ggplot2)
+
+ggplot(jane_austen_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+```
+
+### Comparing the three sentiment dictionaries
+
+Filter for the Jane Austen novel "Pride & Prejudice" and perform inner join with the three lexicons, Afinn, Bing, and NRC.
+
+```{r}
+pride_prejudice <- tidy_books %>%
+  filter(book == "Pride & Prejudice")
+
+pride_prejudice
+
+afinn <- pride_prejudice %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(index = linenumber %/% 80) %>%
+  summarise(sentiment = sum(value)) %>%
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(pride_prejudice %>%
+                            inner_join(get_sentiments("bing")) %>%
+                            mutate(method = "Bing et al."),
+                          pride_prejudice %>%
+                            inner_join(get_sentiments("nrc") %>%
+                                         filter(sentiment %in% c("positive", "negative"))) %>%
+                            mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+```
+
+Plot the results of the 3 lexicons based on estimate of the net sentiment.
+
+```{r}
+bind_rows(afinn,
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+Calculate the number of positive and negative words for the NRC and Bing lexicons.
+
+```{r}
+get_sentiments("nrc") %>%
+  filter(sentiment %in% c("positive",
+                          "negative")) %>%
+  count(sentiment)
+
+get_sentiments("bing") %>%
+  count(sentiment)
+```
+
+### Most common positive and negative words
+
+Calculate the word frequency along with the identified sentiment for Bing lexicon.
+
+```{r}
+bing_word_counts <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts
+```
+
+Plot the top 10 positive and negative words according to the Bing lexicon for the novel "Pride & Prejudice".
+
+```{r}
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+```
+
+Remove word "miss" from the lexicon as the negative sentiment is inaccurate given the context of the novel.
+
+```{r}
+custom_stop_words <- bind_rows(tibble(word = c("miss"),
+                                      lexicon = c("custom")),
+                               stop_words)
+
+custom_stop_words
+```
+
+### Wordclouds
+
+Create a wordcloud of the most frequent words in the novel "Pride & Prejudice".
+
+```{r}
+tidy_books %>%
+  anti_join(stop_words) %>%
+  count(word) %>%
+  with(wordcloud(word, n, max.words = 100))
+```
+
+Create a wordcloud of the most frequent words tagging the positive and negative words by color.
+
+```{r}
+tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+```
+
+### Looking at units beyond just words
+
+Tokenize the novel "Pride & Prejudice" by sentence.
+
+```{r}
+PandP_sentences <- tibble(text = prideprejudice) %>%
+  unnest_tokens(sentence, text, token = "sentences")
+
+PandP_sentences$sentence[2]
+```
+
+Separate the Austen novels by chapter.
+
+```{r}
+austen_chapters <- austen_books() %>%
+  group_by(book) %>%
+  unnest_tokens(chapter, text, token = "regex",
+                pattern = "Chapter|CHAPTER [\\dIVXLC]") %>%
+  ungroup()
+
+austen_chapters %>%
+  group_by(book) %>%
+  summarise(chapters = n())
+```
+
+Calculate the chapters with the highest frequency of negative words.
+
+```{r}
+bingnegative <- get_sentiments("bing") %>%
+  filter(sentiment == "negative")
+
+wordcounts <- tidy_books %>%
+  group_by(book, chapter) %>%
+  summarize(words = n())
+
+tidy_books %>%
+  semi_join(bingnegative) %>%
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  mutate(ratio = negativewords/words) %>%
+  filter(chapter != 0) %>%
+  top_n(1) %>%
+  ungroup()
+```
+
+
+# Citations
+
+NRC
+
+- Name: NRC Word-Emotion Association Lexicon 
+- http://saifmohammad.com/WebPages/lexicons.html 
+- This dataset was published in Saif M. Mohammad and Peter Turney. (2013), ``Crowdsourcing a Word-Emotion Association Lexicon.'' Computational Intelligence, 29(3): 436-465.
+
+Afinn
+
+- Name: AFINN-111 
+- URL: http://www2.imm.dtu.dk/pubdb/views/publication_details.php?id=6010 
+
+Text Mining
+
+- Chapter 2 of https://www.tidytextmining.com/sentiment.html
+
+Syuzhet lexicon
+
+- https://www.rdocumentation.org/packages/syuzhet/versions/1.0.4
+
+Gutenbergr library
+
+- https://cran.r-project.org/web/packages/gutenbergr/vignettes/intro.html
+
