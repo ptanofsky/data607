@@ -1,0 +1,70 @@
+---
+title: "DATA 607 Week 12 Assignment"
+author: "Philip Tanofsky"
+date: "4/9/2020"
+output: html_document
+---
+
+# Spotify's Discover Weekly: Recommender System
+
+Spotify creates an individualized, algorithmically-curated weekly playlist for every user called Discover Weekly with the tagline "your weekly mixtape of fresh music. Enjoy new discoveries and deep cuts chosen just for you. Updated every Monday, so save your favorites!" The weekly playlist is compiled each week based on a recommender system geared to introducing users to unfamiliar or new songs similar to the user's favorite songs and artists.
+
+The Spotify interface for the playlist follows the same visual style as other playlists. The Discover Weekly playlist is presented in a simple manner. The simple interface entices users by not attempting to sell the user through flashy visuals. The UX contains the song title, artist, album, and date the song was added to the playlist. The date doesn't provide much value as the songs only last seven days on the weekly playlist. The interface does allow a user to save the song to the library, like the song, and not like the song, along with a menu for several other actions. Spotify maintains a wide variety of playlists, so Spotify can expect the user to already be comfortable with the interface and format. Although, the Discover Weekly playlist may be good introduction that encourages a user to seek out more algorithmically-curated playlists.
+
+This analysis performs a scenario design analysis of the recommender system behind the Discover Weekly playlist along with an explanation of the algorithm followed by suggestions to improve the already popular recommender system.
+
+# Scenario Design analysis
+
+The first step in understanding the recommender system is the scenario design analysis. The analysis will be performed twice, once for the users of Spotify and then for the company itself.
+
+### Who are your target users?
+
+Of the Spotify user base, the target users are music fans, particularly music fans looking to find or discover music new to them. These music listeners want a curated listening experience. Most users are likely listening to music while performing other activities.
+
+For Spotify, the target users are still the music fans that use the application for listening to music and finding audio entertainment. From Spotify's perspective, the users are the product to advertisers and a revenue source through subscriptions.
+
+### What are their key goals?
+
+For Spotify users, the goal is to hear new songs that they will likely enjoy without having to research new artists. These users want to find music that they would not otherwise find based on lack of time or resources. While listening on the Spotify platform, users likely want to remain in a certain mood or feeling. For users that enjoy listening to music while at work, driving, or working out, the Discover Weekly playlist could answer that desire.
+
+For Spotify, the primary objective is to encourage a user to spend more time using the platform. In the way Facebook measures a user's time on the platform, Spotify wants the user to spend as much time as possible on the platform. As Spotify feeds the user's desire to discover new music, the company implicitly pushes the user to explore more of the platform. Also, with the weekly delivery of the playlist, the functionality encourages a user to listen every week to hear new tracks. Spotify also wants to increase the number of users and of those users increase the number of subscriptions.
+
+### How can you help them accomplish those goals?
+
+From the user's perspective, the Discover Weekly curated playlist provides the user with songs similar to the songs or artists they already enjoy. Each week, the identification of 30 songs the user has not heard but are algorithmically defined as similar to songs the user has listened to previously allows the user to discover new songs without much effort or time exerted. The playlist because a convenience. A well-crafted playlist will likely contain songs of similar mood, genre, or tempo. In the situation of the user listening during certain daily activities, the similar mood or tempo of the new songs will keep the user engaged in the activity and not skipping through songs.
+
+For Spotify, through introducing users to new songs and artists, the company is able to broaden a users interest in additional songs and artists, in turn keeping the user on the platform longer. Also, when Spotify can create a personalized list that truly matches a user's interests, then the user may become a fan of the platform itself, which will help app ratings and encourage word-of-mouth through social media channels. The popularity of one algorithm-based playlist may be a way for Spotify to introduce users to other algorithm-based playlists, again keeping the user on the platform for more time.
+
+# Reverse Engineer the Recommender System
+
+From, the article "How Does Spotify Know You So Well?" (https://medium.com/s/story/spotifys-discover-weekly-how-machine-learning-finds-your-new-music-19a41ab76efe), the author does a great job outining the three recommendation models Spotify uses to create the individualized Discover Weekly playlist. The collaborative filtering model creates a definition of the user's behavior along with other users' behaviors. The natural language processing (NLP) model analyzes text across the internet related to songs and artists. Finally, the audio models analyze the raw audio tracks as a way to identify similar songs. 
+
+### Collaborative Filtering
+
+Collaborative filtering, popularly known as the technique used by Netflix, is able to determine which songs are similar and which users have similar interests based on a matrix factorization formula. Spotify uses implicit user information such as stream counts, liked tracks, and visits to an artist's page as raw data of the user. A matrix is then constructed in which each row represents one of the 140 million users and a column for each of the approximately 30 million songs. The formula results two vectors - a user vector to identify single user's tastes and a song vector to define a single song's profile. These resulting vectors allow Spotify to identify users with similar vectors and group songs with similar vectors.
+
+### Natural Language Processing
+
+The natural language processing model uses track metadata, news articles, blogs, and other texts on the internet as input. According to the article, Spotify crawls the internet constantly for text about the music, particularly looking for adjectives and language with other songs and artists discussed alongside the given song. With this input, cultural vectors are created of the top terms. The terms are then weighted correlating to the relative importance of the word or text phrase. The resulting cultural vector provides another representation of a song.
+
+### Raw Audio Models
+
+The raw audio models take the actual audio of the songs into account so that new songs can be identified for the playlist that wouldn't otherwise be identified by collaborative filtering or natural language processing. The convolutional neural networks that build the audio models are the same used in facial recognition. The algorithm processes audio frames through convolutional layers to create a global temporal pooling layer that establish statistics of the learned features across the entire song. The neural network then passes the audio frames through three dense layers to estimate the time signature, key, mode, tempo and loudness of a song.
+
+# Recommendations
+
+The three models outlined above constitute a strong base to the Discover Weekly recommender system. The following recommendations do not necessarily identify additional prediction models or algorithms, but instead additional insights or inputs into the aforementioned models.
+
+Perhaps other factors could be valuable inputs into the overall make-up of the playlist such as time of year. The collaborative filtering identifies similar users and similar songs, but could the filtering also take into account the genre and mood of an individual user over the course of year. Spotify likely maintains a user's entire listening history on the platform. A user's profile may reveal a pattern based on time of year. A user's listening habits on an annual or daily schedule could impact the construction of the playlist. The playlist may reflect differently for a user who listens primarily during work hours while someone else listens more often in the evening or on weekends. A user's full listening history would likely also reveal changes in musical tastes changed over time. The recommender system could weigh recent likes and listens more heavily than those from over a year ago.
+
+To encourage more exploration of the platform, the recommender system could purposely highlight different genres to the user. The collaborative filtering could purposely identify similar songs that are aligned to different genres. For the model of the user, perhaps a calculated variable measures how musically adventurous are the users tastes. Per user, the curated playlist may venture further from known interests for one user compared to another. A more musically adventurous user would want to be exposed to a wider variety of musical genres in the weekly playlist. A person may want to be "first" to hear a song, or perhaps the person would prefer to only listen to popular songs near the height of popularity.
+
+New and existing songs are used in movies and TV shows, so another input may be to identify songs culturally relevant at the time. Without knowing the Spotify NLP model, another avenue of the model could purposely crawl sites in which music is used in another medium of popular entertainment. The matrix definition of a song could weigh the recent listens of a song more heavily instead of just the overall count of listens. The song profile may take into account whether the song is trending up or down in popularity.
+
+# Conclusion
+
+Overall, Spotify has created a recommender system to create a specific feature to the audio platform, the Discover Weekly playlist. In using the recommender system to curate a personalized playlist every week, Spotify is able to create a relationship or bond with the user through recommendations. As music can be personally important to some individuals, the "just for you" playlist allows an application or platform without any human interaction to convince the user that the platform actually knows them. 
+
+### Citation
+
+"How Does Spotify Know You So Well?", Sophia Ciocca, Oct 10, 2017, https://medium.com/s/story/spotifys-discover-weekly-how-machine-learning-finds-your-new-music-19a41ab76efe.
