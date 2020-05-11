@@ -1,0 +1,1863 @@
+---
+title: 'DATA 607 Final Project: NBA Season 2013'
+author: "Philip Tanofsky"
+date: "5/9/2020"
+output: 
+  html_document:
+    code_folding: show
+    df_print: paged
+    toc: false
+    toc_float: true
+    toc_collapsed: true
+    smooth_scroll: false
+    toc_depth: 3
+number_sections: true
+theme: lumen
+---
+
+<div style="margin-bottom:50px;"></div>
+# Introduction {.tabset}
+
+Individual player impact on game outcome
+
+Hypothesis: Load management (purposely resting a player for an entire game) does impact a team’s win-loss record. The success of a single game is determined by the players that play in the game. (This hypothesis is ignoring the overall season success of a team in which an organization may choose to rest players in anticipation of a long playoff run.) The study will use individual player evaluations in an attempt to identify a statistic valuable at predicting team success per game.
+
+Case study: The NBA franchise of the San Antonio Spurs for the season ending in 2013. The Spurs played against the Miami Heat in the NBA Finals at the conclusion of the season in which the Heat the championship. The San Antonio franchise is known for resting players throughout the season. For the 2013 season I will track the success of the Spurs franchise based on game point differential in conjunction with the team Elo rating as tracked by the web site fivethirtyeight.com. Based on individual player contributions per game, the study will seek to find a correlation with the game-by-game success along with Elo rating movement on a per-game basis.
+
+Further analysis: In attempting to identify the individual contribution of each player at a per-game level, the metric of individual contribution will be vitally important. The NBA community has identified several statistics, commonly classified as advanced statistics to determine a player’s value holistically, or as part of the team’s success. The metrics to be assessed will be the VORP (value over replacement player), PER (player efficiency rating), WS/48 (win shares per 48 minutes), and BPM (box plus/minus). In the attempt to evaluate the individual player contribution, the analysis will compare the different player metrics.
+
+Additional goal: Predict the success of a team at a per-game level. Based on the analysis of individual player metrics, use the player statistics from both teams along with game location as input to predict the point differential of the game’s outcome. For this goal, the study will use predictive analysis of training and testing data from games of the 2012-13 season to create a model to predict point differential of a game’s outcome based on individual player value. The study will attempt to use the Keras machine learning R package based on TensorFlow to more efficiency build and evaluate ML models.
+
+Data sources: 
+
+NBA Elo data: https://github.com/fivethirtyeight/data/tree/master/nba-elo (CSV)
+
+Basketball-reference.com: https://www.basketball-reference.com/ (screen scraping)
+
+APIs: https://www.balldontlie.io/#get-all-stats (API)
+
+```{r imports, warning=FALSE, message=FALSE}
+library(corrplot)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(jsonlite)
+library(keras)
+library(lmtest)
+library(MASS)
+library(MLmetrics)
+library(rvest)
+library(tidyverse)
+library(xml2)
+```
+
+The Spurs team analysis demonstrates the impact of a player's participation or lack thereof on the team's game result. 
+
+Players for Season 2013 outlines the data retrieval and transformation to compile the individual player contributions for every game of the NBA season.
+
+Games for Season 2013 explains the approach to combine all the single game observations into one dataframe to be used for predictive analysis.
+
+Predictions shows the Keras API approach to training and evaluating a TensorFlow based model on the games of the NBA season.
+
+<div style="margin-bottom:50px;"></div>
+## Spurs Team Analysis
+
+Perform data analysis on the performance of the San Antonio Spurs during the 2012-13 NBA season.
+
+### Utility functions
+
+Re-usable code to simplify data retrieval and data transformations.
+
+```{r functions}
+# Function: retrieve_season_results_for_team_season
+# Description: For an NBA team and season, retrieve the game-by-game season results
+# Input: team_id as defined by BDL (integer as string) and season number (ex. "2012")
+# Output: Dataframe of a team's full season sorted by date
+retrieve_season_results_for_team_season <- function(team_id, season) {
+  
+  url <- paste("https://www.balldontlie.io/api/v1/games?seasons[]=", season, "&team_ids[]=", team_id, "&per_page=100", sep="")
+  
+  # From URL, translate JSON to dataframe
+  first_100_games <- fromJSON(url)
+  
+  # Retrieve just the data object, omitting the metadata in the response object
+  full_schedule <- first_100_games$data
+  
+  # Dataframe will not by 2x2, so flatten
+  full_schedule <- flatten(full_schedule, recursive = TRUE)
+  
+  # If team played more than 100 games, make second call to URL to retrieve page 2
+  # Should only occur for teams playing in the NBA Finals as a regular season is 82 games
+  if (!is.null(first_100_games$meta$next_page)) {
+    
+    url <- paste(url, "&page=2", sep="")
+    
+    # "https://www.balldontlie.io/api/v1/games?seasons[]=2013&team_ids[]=16&per_page=100&page=2"
+    addl_games <- fromJSON(url)
+    
+    addl_games_data <- addl_games$data
+    
+    addl_games_data <- flatten(addl_games_data, recursive = TRUE)
+    
+    full_schedule <- rbind(full_schedule, addl_games_data)
+  }
+  
+  # Sort the games by date
+  full_schedule <- full_schedule[order(as.Date(full_schedule$date)),]
+  
+  # Return dataframe containing the season of games in date order
+  full_schedule
+}
+
+# Function: retrieve_game_stats_for_player_season
+# Description: For an NBA player and season, retrieve the game-by-game season results
+# Input: player_id as defined by BDL (integer as string) and season number (ex. "2012")
+# Output: Dataframe of a player's full season sorted by date 
+retrieve_game_stats_for_player_season <- function(player_id, season) {
+  
+  url <- paste("https://www.balldontlie.io/api/v1/stats?seasons[]=", season, "&player_ids[]=", player_id, "&per_page=100", sep="")
+  
+  # From URL, translate JSON to dataframe
+  first_100_games <- fromJSON(url)
+  
+  # Retrieve just the data object, omitting the metadata in the response object
+  full_schedule <- first_100_games$data
+  
+  # Make sure there is response for the player_id
+  if (exists('full_schedule') && is.data.frame(get('full_schedule'))) {
+  
+    # Dataframe will not by 2x2, so flatten
+    full_schedule <- flatten(full_schedule, recursive = TRUE)
+  
+    # If metadata is not null, then call for second page of player
+    # This means more than 100 games played by the playe in the season
+    if (!is.null(first_100_games$meta$next_page)) {
+    
+      url <- paste(url, "&page=2", sep="")
+    
+      addl_games <- fromJSON(url)
+      addl_games_data <- addl_games$data
+      addl_games_data <- flatten(addl_games_data, recursive = TRUE)
+    
+      full_schedule <- rbind(full_schedule, addl_games_data)
+    }
+  
+    # Sort by date
+    full_schedule <- full_schedule[order(as.Date(full_schedule$game.date)),]
+  }
+  
+  # Return dataframe containing the season of games in date order
+  full_schedule
+}
+
+# Function: add_column_player_did_play_game
+# Description: Add column to input dataframe if player played in game. If so, enter minutes played, if not, enter '0'
+# Input: Dataframe of team's season schedule, dataframe of player's season schedule, column number to add to team dataframe
+# Output: Dataframe of team's season schedule with additional columns for player's minutes played per game
+add_column_player_did_play_game <- function(team_df, player_df, col_name) {
+  
+  # Loop through the team's season df
+  for (row in 1:nrow(team_df)) {
+  
+    # Get game_id for row
+    game_id <- team_df[row, "id"]
+  
+    # Get the corresponding row from player df based on game_id
+    player_row <- subset(player_df, game.id == game_id)
+  
+      # Add column to team df with minutes played by player for given game
+      if ( nrow(player_row) > 0 ) {
+        minutes <- strsplit(player_row[1, 14], ":")[[1]][1]
+        if (!is.na(minutes)) {
+          team_df[row, col_name] <- minutes
+        } else {
+          team_df[row, col_name] <- 0 
+        }
+      } else {
+        team_df[row, col_name] <- 0 
+      }
+  }
+  
+  # Return team_df with additional column
+  team_df
+}
+
+```
+
+Display of San Antonio Spurs team roster with player ID according to API at www.balldontlie.io.
+
+```{r}
+# Read in the San Antonio Spurs roster from season ending 2013
+sas_roster_2013 <- read.csv("sas_roster_2013.csv", header=TRUE, as.is = TRUE)
+sas_roster_2013
+```
+
+Display of San Antonio Spurs team advanced statistics by player for season 2012-13 found at www.basketball-reference.com.
+
+```{r}
+# Read in advanced statistics for Spurs roster for season ending 2013
+sas_adv_2013 <- read.csv("SAS_2013_ADV.csv", header=TRUE, as.is = TRUE)
+
+# Create column to only contain last name of player
+for (row in 1:nrow(sas_adv_2013)) {
+  sas_adv_2013[row, 'Name'] <- strsplit(sas_adv_2013[row, 'Name'], " ")[[1]][2]
+}
+
+# Display dataframe
+sas_adv_2013
+```
+
+Load data through API or local CSV files.
+
+```{r}
+
+  # Pull Elo data from CSV
+  #  df_nba_elo <- read.csv("nbaallelo.csv", header=TRUE, as.is = TRUE)
+  
+  # Read in data from fivethirtyeight into dataframe
+  df_nba_elo <- read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/nba-elo/nbaallelo.csv")
+ 
+  # Retrieve game results for San Antonio Spurs for season 2013
+  # Pull Spurs data from CSV files
+  sas_2013 <- read.csv("Sas_2013_BallDontLie.csv", header=TRUE, as.is = TRUE)
+  season_game_ids <- read.csv("Sas_2013_Minutes_Played.csv", header=TRUE, as.is = TRUE)
+```
+
+San Antonio Spurs full game schedule for season 2012-13 as retrieved from www.balldontlie.io.
+
+```{r}
+head(sas_2013)
+```
+
+San Antonio Spurs Elo ratings by game as calculated by fivethirtyeight.com. Dataframe contains 103 observations, 1 for each Spurs game, along with 23 features (columns).
+
+```{r}
+# Retrieve data from Elo dataframe only pertaining to Spurs for 2013 season
+df_nba_elo <- filter(df_nba_elo, year_id == 2013 & team_id == "SAS")
+
+# Display Elo data for initial inspection
+head(df_nba_elo)
+dim(df_nba_elo)
+```
+
+San Antonio Spurs season by game including the game ID from www.balldontlie.io along with the minutes played by each player in the game. Dataframe contains 103 observations, 1 for each Spurs game, along with 18 features (columns).
+
+```{r}
+# Display season game_ids for initial inspection
+head(season_game_ids)
+dim(season_game_ids)
+```
+
+Transform the data into a dataframe containing the Spurs season by game with pertinent statistics for analysis.
+
+```{r}
+# Add columns and clear unnecessary columns
+
+# Column for Team Score
+sas_2013$Team_Score <- ifelse(sas_2013$home_team.id == 27, sas_2013$home_team_score, sas_2013$visitor_team_score)
+
+# Column for Opponent Score
+sas_2013$Opp_Score <- ifelse(sas_2013$home_team.id != 27, sas_2013$home_team_score, sas_2013$visitor_team_score)
+
+# Columns for Team and Opponent ID as defined at balldontlie API
+sas_2013$Team_Id <- ifelse(sas_2013$home_team.id == 27, sas_2013$home_team.id, sas_2013$visitor_team.id)
+sas_2013$Opp_Id  <- ifelse(sas_2013$home_team.id != 27, sas_2013$home_team.id, sas_2013$visitor_team.id) 
+
+# Columns for Team and Opponent Abbreviations as defined at balldontlie API
+sas_2013$Team_Abbr <- ifelse(sas_2013$home_team.id == 27, sas_2013$home_team.abbreviation, sas_2013$visitor_team.abbreviation)
+sas_2013$Opp_Abbr  <- ifelse(sas_2013$home_team.id != 27, sas_2013$home_team.abbreviation, sas_2013$visitor_team.abbreviation)
+
+# Column for Team as Home team (T or F)
+sas_2013$Home  <- ifelse(sas_2013$home_team.id == 27, TRUE, FALSE)
+
+# Column for Points differential of game outcome from standpoint of Team
+sas_2013$Pts_Diff  <- sas_2013$Team_Score - sas_2013$Opp_Score
+
+# Determine difference in days between consecutive games
+sas_2013 <- sas_2013 %>%
+  mutate(Date_Diff = as.Date(date) - lag(as.Date(date), default = 0))
+
+# Mark each game as second of back-to-back
+sas_2013$B2B  <- ifelse(sas_2013$Date_Diff == 1, TRUE, FALSE)
+
+# Keep the columns needed for further analysis
+sas_2013 <- sas_2013[ , c("id", "date", "Team_Score", "Opp_Score", "postseason", "Team_Id", "Opp_Id", "Team_Abbr", "Opp_Abbr", "Home", "Pts_Diff", "B2B"), drop=FALSE ]
+
+## Add Elo rating from fivethirtyeight input data
+sas_2013$Elo_Result <- df_nba_elo$elo_n
+
+## End column additions
+
+
+# Calculate advanced statistice for a Team
+# Minutes / 48 * adv_stat for each player, then sum those up
+# season_game_ids: the minutes played by player for each game
+# sas_adv_2013: sa roster advanced stats for season ending 2013
+
+per_for_season <- list()
+vorp_for_season <- list()
+ws48_for_season <- list()
+bpm_for_season <- list()
+
+for (i in 1:nrow(season_game_ids)) {
+  
+  game <- season_game_ids[i,]
+
+  per_for_player <- 0.0
+  per_for_game <- 0.0
+  vorp_for_player <- 0.0
+  vorp_for_game <- 0.0
+  ws48_for_player <- 0.0
+  ws48_for_game <- 0.0
+  bpm_for_player <- 0.0
+  bpm_for_game <- 0.0
+
+
+  for (row in 1:nrow(sas_adv_2013)) {
+  
+    name <- sas_adv_2013[row, "Name"]
+    per  <- sas_adv_2013[row, "PER"]
+    vorp <- sas_adv_2013[row, "VORP"]
+    ws48 <- sas_adv_2013[row, "WS.48"]
+    bpm  <- sas_adv_2013[row, "BPM"]
+  
+    minutes <- as.integer(game[ , grepl( name , names( game ) ) ])
+  
+    per_for_player <- (minutes / 48) * per
+    per_for_game <- per_for_game + per_for_player
+    
+    vorp_for_player <- (minutes / 48) * vorp
+    vorp_for_game <- vorp_for_game + vorp_for_player
+    
+    ws48_for_player <- (minutes / 48) * ws48
+    ws48_for_game <- ws48_for_game + ws48_for_player
+    
+    bpm_for_player <- (minutes / 48) * bpm
+    bpm_for_game <- bpm_for_game + bpm_for_player
+    
+  }
+
+  per_for_season[[i]] <- Reduce("+",per_for_game)
+  vorp_for_season[[i]] <- Reduce("+",vorp_for_game)
+  ws48_for_season[[i]] <- Reduce("+",ws48_for_game)
+  bpm_for_season[[i]] <- Reduce("+",bpm_for_game)
+
+}
+
+
+sas_2013$PER  <- unlist(per_for_season)
+sas_2013$VORP <- unlist(vorp_for_season)
+sas_2013$WS48 <- unlist(ws48_for_season)
+sas_2013$BPM  <- unlist(bpm_for_season)
+# Done calculations for the advanced stats at the per game level
+
+# Create df that simply identifies if player played (1) or not (0)
+# This way I can create boxplots for each player
+season_game_ids[,-2] = (season_game_ids[,-2] != 0) * 1
+
+# Merge with DF containing the game outcomes
+all_in <- merge(sas_2013, season_game_ids, by="id")
+
+# Display the wide df
+head(all_in)
+```
+
+Plots to show the Spurs team performance given the inclusion or absence of a star player in the game. A plot is generated each for Tim Duncan, Kawhi Leonard, Tony Parker, and Manu Ginobili to show the team's result (point differential) given the player's participation. The plots clearly show better team performance when Duncan, Parker, and Ginobili play instead of rest. The plot for Leonard does not match the other three, as the median point differential is essentially same when plays or not.
+
+```{r fig.width=10, fig.height=8}
+# BOXPLOTS
+
+# Boxplot of Spurs game results based on Duncan playing or not
+p1 <- ggplot(all_in, aes(x=as.character(Duncan), y=Pts_Diff)) + 
+  geom_boxplot() +
+  xlab('Duncan did NOT play (0) or DID play (1)') +
+  ylab('Game Result')
+
+# Boxplot of Spurs game results based on Leonard playing or not
+p2 <- ggplot(all_in, aes(x=as.character(Leonard), y=Pts_Diff)) + 
+  geom_boxplot() +
+  xlab('Leonard did NOT play (0) or DID play (1)') +
+  ylab('Game Result')
+
+# Boxplot of Spurs game results based on Parker playing or not
+p3 <- ggplot(all_in, aes(x=as.character(Parker), y=Pts_Diff)) + 
+  geom_boxplot() +
+  xlab('Parker did NOT play (0) or DID play (1)') +
+  ylab('Game Result')
+
+# Boxplot of Spurs game results based on Ginobili playing or not
+p4 <- ggplot(all_in, aes(x=as.character(Ginobili), y=Pts_Diff)) + 
+  geom_boxplot() +
+  xlab('Ginobili did NOT play (0) or DID play (1)') +
+  ylab('Game Result')
+
+# Display plots in 2x2 form
+grid.arrange(p1, p2, p3, p4, nrow=2, ncol=2)
+```
+
+Summary of the Elo statistic indicates a mean value of 1688. A rating of 1500 is approximately average.
+
+```{r fig.width=10, fig.height=8}
+# SUMMARY OF STATS
+summary(sas_2013$Elo_Result)
+```
+
+Summary of the points differential indicates a mean value of 6.524, which means the Spurs game result is a win by 6.5 points on average.
+
+```{r}
+summary(sas_2013$Pts_Diff)
+```
+
+Summary of the PER statistic indicates the cumulative team's PER for a game based on each player's season PER and minutes played in the game is on average 81.75.
+
+```{r}
+summary(sas_2013$PER)
+```
+
+Summary of the VORP statistic indicates the cumulative team's VORP for a game based on each player's season VORP and minutes played in the game is on average 9.071.
+
+```{r}
+summary(sas_2013$VORP)
+```
+
+Summary of the win shares per 48 minutes statistic indicates the cumulative team's WS48 for a game based on each player's season WS48 and minutes played in the game is on average 0.7099.
+
+```{r}
+summary(sas_2013$WS48)
+```
+
+Summary of the boxscore plus-minus statistic indicates the cumulative team's BPM for a game based on each player's season BPM and minutes played in the game is on average 8.862.
+
+```{r}
+summary(sas_2013$BPM)
+```
+
+The histogram plots of the four advanced statistics show a similar behavior across all four. As the four star players for the San Antonio Spurs have the higher individual advanced statistics, the plots show a slight left skew as the star players typically play together.
+
+```{r fig.width=10, fig.height=8, warning=FALSE, message=FALSE}
+# HISTOGRAMS
+h1 <- ggplot(sas_2013, aes(x=PER)) + 
+      geom_vline(aes(xintercept=mean(PER)), color="blue", linetype="dashed", size=1) + 
+      geom_histogram(aes(y=..density..), colour="black", fill="white")+
+      geom_density(alpha=.2, fill="#FF6666")
+
+h2 <- ggplot(sas_2013, aes(x=VORP)) + 
+      geom_vline(aes(xintercept=mean(VORP)), color="blue", linetype="dashed", size=1) + 
+      geom_histogram(aes(y=..density..), colour="black", fill="white")+
+      geom_density(alpha=.2, fill="#FF6666")
+
+h3 <- ggplot(sas_2013, aes(x=WS48)) + 
+      geom_vline(aes(xintercept=mean(WS48)), color="blue", linetype="dashed", size=1) + 
+      geom_histogram(aes(y=..density..), colour="black", fill="white")+
+      geom_density(alpha=.2, fill="#FF6666")
+
+h4 <- ggplot(sas_2013, aes(x=BPM)) + 
+      geom_vline(aes(xintercept=mean(BPM)), color="blue", linetype="dashed", size=1) + 
+      geom_histogram(aes(y=..density..), colour="black", fill="white")+
+      geom_density(alpha=.2, fill="#FF6666")
+
+grid.arrange(h1, h2, h3, h4, nrow=2, ncol=2)
+```
+
+Display the San Antonio Spurs game-level statistics before performing normalization in the line graphs.
+
+```{r}
+# Display df used for creating line graphs
+head(sas_2013)
+```
+
+The line graphs below demonstrate each of the advanced statistics in comparison to the point differential across the entire 2012-13 season. All values have been normalized. See median values above to translate the plots y-axis zero value in terms of actual value.
+
+Lines:
+
+- Black: Point differential
+- Red: PER
+- Green: VORP
+- Blue: WS48
+- Purple: BPM
+
+Based on the below plots, the correlation between advanced statistic value and game outcome's point differential is difficult to ascertain.
+
+```{r fig.width=10, fig.height=8}
+# LINE GRAPHS
+
+# Basic line plot with points
+p10 <- ggplot() +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="black") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((PER - mean(PER)) / sd(PER)), group=1), color="red") +
+    xlab('Games') +
+    ylab('PER Normalized') +
+    ylim(-3, 3)
+
+p11 <- ggplot() +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="black") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((VORP - mean(VORP)) / sd(VORP)), group=1), color="green") +
+    xlab('Games') +
+    ylab('VORP Normalized') +
+    ylim(-3, 3)
+
+p12 <- ggplot() +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="black") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((WS48 - mean(WS48)) / sd(WS48)), group=1), color="blue") +
+    xlab('Games') +
+    ylab('WS48 Normalized') +
+    ylim(-3, 3)
+
+p13 <- ggplot() +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="black") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((BPM - mean(BPM)) / sd(BPM)), group=1), color="purple") +
+    xlab('Games') +
+    ylab('BPM Normalized') +
+    ylim(-3, 3)
+
+# Display the 4 plots in 2x2 form
+grid.arrange(p10, p11, p12, p13, nrow=2, ncol=2)
+```
+
+The below line graph plots the four advanced statistics together on the same graph, again all values normalized. The four graphs do follow the same pattern from the season's start to finish, an expected result given the calculations based on the individual players' minutes in each game.
+
+```{r fig.width=10, fig.height=8}
+# Display just the 4 statistics
+ggplot() +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((PER - mean(PER)) / sd(PER)), group=1), color="red") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((VORP - mean(VORP)) / sd(VORP)), group=1), color="green") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((WS48 - mean(WS48)) / sd(WS48)), group=1), color="blue") +
+  geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((BPM - mean(BPM)) / sd(BPM)), group=1), color="purple") +
+  xlab('Games') +
+  ylab('Advanced Stats Normalized') +
+  ylim(-3, 3)
+```
+
+The following four line graphs is an attempt to overlay the different evaluation metrics into one graph. All values normalized.
+
+Top left (black): Elo rating across the entire season. Graph appears to show the team's Elo rating dropping two-thirds into the season. An Elo rating goes down only after a loss. An assumption can be made that some players are sitting out in preparation for a long playoff run.
+
+Top right (red): Point differential across the entire season. A broader dip does appear two thirds into the season, indicating lower point differentials and more lost games.
+
+Bottom left (purple): BPM across the entire season. As noted above, two thirds into the season, several low dips occur indicating star players did not play. Also of note, the BPM peaks and remains high through the end of the season as the Spurs were playing in the conference finals and the NBA Finals. 
+
+Bottom right: Attempting to overlay the three line graphs into one. Honestly, two busy to be of any discernible value.
+
+```{r fig.width=10, fig.height=8}
+# Elo, Pts, PER
+
+z1 <- ggplot() +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Elo_Result - mean(Elo_Result)) / sd(Elo_Result)), group=1), color="black") +
+      xlab('Games') +
+      ylab('Elo Rating (Normalized)') +
+      ylim(-3, 3)
+
+z2 <- ggplot() +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="red") +
+      xlab('Games') +
+      ylab('Points Differential (Normalized)') +
+      ylim(-3, 3)
+
+z3 <- ggplot() +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((BPM - mean(BPM)) / sd(BPM)), group=1), color="purple") +
+      xlab('Games') +
+      ylab('BPM (Normalized)') +
+      ylim(-3, 3)
+
+z4 <- ggplot() +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Elo_Result - mean(Elo_Result)) / sd(Elo_Result)), group=1), color="black") +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((Pts_Diff - mean(Pts_Diff)) / sd(Pts_Diff)), group=1), color="red") +
+      geom_line(data=sas_2013, aes(x=1:nrow(sas_2013), y=((BPM - mean(BPM)) / sd(BPM)), group=1), color="purple") +
+      xlab('Games') +
+      ylab('Elo Rating, Points Differential, BPM (Normalized)') +
+      ylim(-3, 3)
+
+# Display the 4 plots in 2x2 form
+grid.arrange(z1, z2, z3, z4, nrow=2, ncol=2)
+
+```
+
+### Analysis
+
+The box plots outline the relationship between the participation of a star player and the team's success as based on the games' point differentials. The line graph comparing the Spurs Elo rating with the BPM across the season also indicates a relationship between the success of the team per game in relationship to the quality of the players in each game.
+
+<div style="margin-bottom:50px;"></div>
+## Players for Season 2013
+
+### Step 1
+
+Build a dataframe of all the players available from the Ball Don't Lie API (www.balldontlie.io).
+
+**Goal:** In order to look up player statistics for a given season, I require the unique player ID for each player
+
+Endpoint: https://www.balldontlie.io/api/v1/players?per_page=100&page=1
+    
+```{r eval=FALSE}
+# Not running this code, instead pulling the CSV below
+
+# Call the API 33 times in order to retrieve the total available: 3268
+url_base <- "https://www.balldontlie.io/api/v1/players?per_page=100&page="
+
+# Make first call establish the dataframe
+url_full_1 <- paste(url_base, "1", sep="")
+
+df_players <- fromJSON(url_full_1)
+
+df_players <- df_players$data
+
+df_players <- flatten(df_players, recursive = TRUE)
+
+for (i in 2:33) {
+  
+  # Create URL with incremented page number
+  url_full <- paste(url_base, i, sep="")
+  
+  df_players_tmp <- fromJSON(url_full)
+  
+  df_players_tmp <- df_players_tmp$data
+  
+  df_players_tmp <- flatten(df_players_tmp, recursive = TRUE)
+  
+  df_players <- rbind(df_players, df_players_tmp)
+  
+}
+
+dim(df_players)
+head(df_players)
+
+write.csv(df_players,"players_all_bdl.csv", row.names = TRUE)
+# Now have CSV of all the players from BallDontLie API (3268) in CSV "players_all_bdl.csv"
+```
+
+Output of previously generated CSV indicates:
+
+- 3268 observations (players)
+- 15 columns (attributes of each player)
+
+```{r}
+players_2013 <- read.csv("players_all_bdl.csv", header=TRUE, as.is = TRUE)
+
+dim(players_2013)
+head(players_2013)
+```
+
+### Step 2
+
+Build a dataframe per team of the advanced statistics of each player on the given team in 2012-13 season by screen scraping the information from www.basketball-reference.com. Due to concerns of being throttled, I individually ran the script 30 teams to retrieve the advanced statistics for each team in the season
+
+**Goal:** Attain the advanced statistics for every player participating in the 2012-13 NBA season.
+
+Endpoint: https://www.basketball-reference.com/teams/ATL/2013.html
+
+```{r eval=FALSE}
+# Technique to retrieve commented out html code when screen scraping the data
+# From: https://stackoverflow.com/questions/48778493/web-scraping-basketball-reference-using-r
+
+
+# Example URL: team_2103 = 'https://www.basketball-reference.com/teams/MIA/2013.html'
+team_abbr <- "ATL" # Start with Atlanta
+url <- paste("https://www.basketball-reference.com/teams/", team_abbr, "/2013.html", sep="")
+
+df_advanced =  url %>%
+                read_html %>%
+                html_nodes(xpath = '//comment()') %>%
+                html_text() %>%
+                paste(collapse='') %>%
+                read_html() %>% 
+                html_node("#advanced") %>% 
+                html_table()
+
+head(df_advanced)
+
+outputfile <- paste(team_abbr, "_2013_ADV.csv", sep="")
+
+# write.csv(df_advanced, outputfile, row.names = TRUE)
+```
+
+Output of one previously generated CSV demonstrates:
+
+- 18 observations (players on the Atlanta Hawks)
+- 28 columns (statistics of each player for the 2013 season)
+
+```{r}
+players_2013 <- read.csv("Teams_ADV/ATL_2013_ADV.csv", header=TRUE, as.is = TRUE)
+
+dim(players_2013)
+head(players_2013)
+```
+
+### Step 3
+
+Build a dataframe of all the players in 2012-13 NBA season with advanced stats and the player ID from Ball Don't Lie API.
+
+**Goal:** Create a single source of record for all players of the 2012-13 season that contains all the advanced stats from www.basketball-reference.com with a unique identifier to the player at the www.balldontlie.io API.
+
+Inputs (previously generated files): 
+
+- "teams.csv"
+- "Teams_ADV/ATL_2013_ADV.csv" (1 for each of the 30 teams in a single directory)
+
+#### Create one dataframe
+
+The below code snippet combines the 30 files of advanced statistics into a single dataframe.
+
+```{r eval=FALSE}
+
+# Read in CSV with team abbreviations
+teams_2013 <- read.csv("teams.csv", header=TRUE, as.is = TRUE)
+head(teams_2013)
+
+# Build DF of all the players with advanced, add team abbreviation
+teams_2013[1, 'team.abr.br']
+
+csv_file <- paste("Teams_ADV/", teams_2013[1, 'team.abr.br'], "_2013_ADV.csv", sep="")
+
+team_roster_adv_2013 <- read.csv(csv_file, header=TRUE, as.is = TRUE)
+
+team_roster_adv_2013$team <- teams_2013[1, 'team.abr.br']
+
+for (row in 2:30) {
+  
+  csv_file <- paste("Teams_ADV/", teams_2013[row, 'team.abr.br'], "_2013_ADV.csv", sep="")
+
+  team_roster_adv_2013_temp <- read.csv(csv_file, header=TRUE, as.is = TRUE)
+
+  team_roster_adv_2013_temp$team <- teams_2013[row, 'team.abr.br']
+  
+  team_roster_adv_2013 <- rbind(team_roster_adv_2013, team_roster_adv_2013_temp)
+}
+
+# Full list contained in single df now
+
+# Separate first name and last name into columns
+for (row in 1:nrow(team_roster_adv_2013)) {
+  team_roster_adv_2013[row, 'first_name'] <- strsplit(team_roster_adv_2013[row, 'X.1'], " ")[[1]][1]
+  team_roster_adv_2013[row, 'last_name']  <- strsplit(team_roster_adv_2013[row, 'X.1'], " ")[[1]][2]
+}
+
+# Keep the columns needed for further analysis
+team_roster_adv_2013 <- team_roster_adv_2013[ , c("last_name", "first_name", "team", "PER", "WS.48", "BPM", "VORP"), drop=FALSE ]
+
+head(team_roster_adv_2013)
+dim(team_roster_adv_2013)
+
+write.csv(team_roster_adv_2013, "players_ADV_2013.csv", row.names = TRUE)
+```
+
+#### Add unique identifier to single dataframe
+
+Given the single dataframe containing every player with advanced statistics, add a column with the unique player ID to the www.balldontlie.com API. Pare down the dataframe to contain only necessary columns.
+
+```{r eval=FALSE}
+library(dplyr)
+
+players_2013_adv <- read.csv("players_ADV_2013.csv", header=TRUE, as.is = TRUE)
+head(players_2013_adv)
+
+players_all_bdl  <- read.csv("players_all_bdl.csv", header=TRUE, as.is = TRUE)
+  head(players_all_bdl)
+  
+df3 <- players_all_bdl %>% right_join(players_2013_adv, by=c("last_name","first_name"))
+  
+# Keep the columns needed for further analysis
+df3 <- df3[ , c("id", "first_name", "last_name", "team", "PER", "WS.48", "BPM", "VORP"), drop=FALSE ]
+head(df3)
+dim(df3)
+
+write.csv(df3, "players_ID_ADV_2013.csv", row.names = TRUE)
+```
+
+#### teams.csv
+
+Contains the team name, the team abbreviation used for www.basketball-reference.com, and the team ID to www.balldontlie.io
+
+```{r}
+teams_2013 <- read.csv("teams.csv", header=TRUE, as.is = TRUE)
+dim(teams_2013)
+head(teams_2013)
+```
+
+#### players_ADV_2013.csv
+
+Contains a row for each player with name, team, and advanced statistics for the season
+
+```{r}
+players_2013_adv <- read.csv("players_ADV_2013.csv", header=TRUE, as.is = TRUE)
+dim(players_2013_adv)
+head(players_2013_adv)
+```
+
+#### players_all_bdl.csv
+
+Contains every player available from the API at www.balldontlie.com. The unique ID is the key aspect from this dataframe.
+
+```{r}
+players_all_bdl  <- read.csv("players_all_bdl.csv", header=TRUE, as.is = TRUE)
+dim(players_all_bdl)
+head(players_all_bdl)
+```
+
+#### players_ID_ADV_2013.csv
+
+Combines the above two dataframes to include every player in the 2012-13 NBA season with unique ID to API at www.balldontlie.com and advanced statistics from www.basketball-reference.com.
+
+```{r}
+players_2013 <- read.csv("players_ID_ADV_2013.csv", header=TRUE, as.is = TRUE)
+dim(players_2013)
+head(players_2013)
+```
+
+### Analysis
+
+The retrieval and transformation of the individual player statistical data takes time and patience to find the right sources of the data and then marry the data across different sources. The ability to call APIs and screen scrape data using the R language allows for automating the process when a repetitive task arises. Given that NBA data is organized by team, the repetitive task of retrieving data by team was easy to accomplish once automated.
+
+<div style="margin-bottom:50px;"></div>
+## Games for Season 2013
+
+The predictive analysis requires the creation a single dataframe that contains every game of the 2012-13 NBA season as an observation. Each observation will contain the Elo rating of each team along with the cumulative advanced statistics based on the minutes played of each player in the game. The dataframe will also identify the number of days since each team's previous game along with an identifier of the home team. Finally, the dataframe will contain the game outcome's point differential from the perspective of the team with the higher Elo rating before the game.
+
+### Step 0
+
+Import previously generated dataframes and define re-usable functions to easily calculate the per game cumulative advanced statistics for each team.
+
+Inputs: 
+
+- "nbaallelo.csv" (Elo rating of every team for every game as compiled by fivethirtyeight.com)
+- "players_ID_ADV_2013.csv" (Generated in previous section)
+- https://www.balldontlie.io/api/v1/stats?seasons[]=2012&player_ids[]=237&per_page=100 (retrieve player stats for a season)
+- https://www.balldontlie.io/api/v1/games?seasons[]=2012&team_ids[]=16&per_page=100 (retrieve team games for a season)
+
+```{r eval=FALSE}
+  # Don't need to execute as these files have already been retrieved.
+  # Leaving section as part of insight into initial process of building data
+
+  # Read in data from fivethirtyeight into dataframe
+  # Pull Elo data
+  df_nba_elo <- read.csv("nbaallelo.csv", header=TRUE, as.is = TRUE)
+  #df_nba_elo <- read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/nba-elo/nbaallelo.csv")
+
+
+  # Read in the CSV for all players of 2013 season
+  players_2013 <- read.csv("players_ID_ADV_2013.csv", header=TRUE, as.is = TRUE)
+  # Clean up player names
+  players_2013$first_name <- gsub("[[:punct:]]", "", players_2013[["first_name"]])
+  players_2013$last_name <- gsub("[[:punct:]]", "", players_2013[["last_name"]])
+```
+
+```{r file-functions}
+# FUNCTIONS
+
+# Function: retrieve_season_results_for_team_season_pred
+# Description: For an NBA team and season, retrieve the game-by-game season results
+# Input: team_id as defined by BDL (integer as string), team abbreviation by BR and season number (ex. "2012")
+# Output: Dataframe of a team's full season sorted by date 
+retrieve_season_results_for_team_season_pred <- function(team_id, team_abr, season) {
+  
+  url <- paste("https://www.balldontlie.io/api/v1/games?seasons[]=", season, "&team_ids[]=", team_id, "&per_page=100", sep="")
+  
+  first_100_games <- fromJSON(url)
+  
+  full_schedule <- first_100_games$data
+  
+  full_schedule <- flatten(full_schedule, recursive = TRUE)
+  
+  if (!is.null(first_100_games$meta$next_page)) {
+    
+    url <- paste(url, "&page=2", sep="")
+    
+    # "https://www.balldontlie.io/api/v1/games?seasons[]=2013&team_ids[]=16&per_page=100&page=2"
+    addl_games <- fromJSON(url)
+    
+    addl_games_data <- addl_games$data
+    
+    addl_games_data <- flatten(addl_games_data, recursive = TRUE)
+    
+    full_schedule <- rbind(full_schedule, addl_games_data)
+  }
+  
+  full_schedule <- full_schedule[order(as.Date(full_schedule$date)),]
+  
+  full_schedule$team_id <- team_id
+  
+  elo_season <- as.integer(season) + 1
+  
+  df_nba_elo_team <- filter(df_nba_elo, year_id == elo_season & team_id == team_abr)
+  
+  ## Add Elo rating from fivethirtyeight input data
+  full_schedule$elo_i <- df_nba_elo_team$elo_i
+  
+  # Determine difference in days between consecutive games
+  full_schedule <- full_schedule %>%
+    mutate(Days_Off = as.Date(date) - lag(as.Date(date), default = 0))
+  
+  # Fix the first game to default to 
+  full_schedule$Days_Off  <- ifelse(full_schedule$Days_Off >= 10, 10, full_schedule$Days_Off)
+  
+  # Return variable
+  full_schedule
+}
+
+# Function: add_column_player_did_play_game_pred
+# Description: Add column to input dataframe if player played in game. If so, enter minutes played, if not, enter '0'
+# Input: Dataframe of team's season schedule, dataframe of player's season schedule, column number to add to team dataframe
+# Output: Dataframe of team's season schedule with additional columns for player's minutes played per game
+add_column_player_did_play_game_pred <- function(team_df, player_df, col_name) {
+  
+  for (row in 1:nrow(team_df)) {
+  
+    game_id <- team_df[row, "id"]
+  
+    player_row <- subset(player_df, game.id == game_id)
+  
+      if ( nrow(player_row) > 0 ) {
+        # TODO: perform rounding instead of truncating
+        minutes <- strsplit(player_row[1, 14], ":")[[1]][1]
+        if (!is.na(minutes)) {
+          team_df[row, col_name] <- minutes
+        } else {
+          team_df[row, col_name] <- 0 
+        }
+      } else {
+        team_df[row, col_name] <- 0 
+      }
+  }
+  
+  # Return team_df with additional column
+  team_df
+}
+
+# Function: retrieve_game_stats_for_player_season_pred
+# Description: For an NBA player and season, retrieve the game-by-game season results
+# Input: player_id as defined by BDL (integer as string) and season number (ex. "2012")
+# Output: Dataframe of a player's full season sorted by date 
+retrieve_game_stats_for_player_season_pred <- function(player_id, season) {
+  
+  url <- paste("https://www.balldontlie.io/api/v1/stats?seasons[]=", season, "&player_ids[]=", player_id, "&per_page=100", sep="")
+  
+  first_100_games <- fromJSON(url)
+  
+  full_schedule <- first_100_games$data
+  
+  if (exists('full_schedule') && is.data.frame(get('full_schedule'))) {
+  
+    full_schedule <- flatten(full_schedule, recursive = TRUE)
+  
+    if (!is.null(first_100_games$meta$next_page)) {
+    
+      url <- paste(url, "&page=2", sep="")
+    
+      addl_games <- fromJSON(url)
+      addl_games_data <- addl_games$data
+      addl_games_data <- flatten(addl_games_data, recursive = TRUE)
+    
+      full_schedule <- rbind(full_schedule, addl_games_data)
+    }
+  
+    full_schedule <- full_schedule[order(as.Date(full_schedule$game.date)),]
+  
+  }
+  
+  # Return variable
+  full_schedule
+}
+
+# Function: calculate_advanced_stats_for_team_for_season_pred
+# Description: Calcualte the cumulative advanced statistics per game for each team based on players' minutes played in the game
+# Input: Dataframe containing the team's schedule, String containing the team's abbreviation for
+# Output: The input dataframe with additional columns containing the calculated cumulative advanced statistics
+calculate_advanced_stats_for_team_for_season_pred <- function(df_team_schedule, team_abr) {
+  
+  # Need to get game stats per team
+  team_players_adv <- filter(players_2013, team == team_abr)
+
+  # Use intermetidate DF with player names, so it can then be deleted
+  team_game_ids <- df_team_schedule[ , c("id"), drop=FALSE ]
+
+  for (row in 1:nrow(team_players_adv)) {
+    
+    player_name <- as.character(team_players_adv[row, "last_name"])
+    player_id <- team_players_adv[row, "id"]
+  
+    player <- retrieve_game_stats_for_player_season_pred(player_id, season)
+  
+    # Only add to df is player has data
+    if (exists('player') && is.data.frame(get('player'))) {
+      team_game_ids <- add_column_player_did_play_game_pred(team_game_ids, player, player_name)
+    }
+  }
+
+  per_for_season <- list()
+  vorp_for_season <- list()
+  ws48_for_season <- list()
+  bpm_for_season <- list()
+
+  for (i in 1:nrow(team_game_ids)) {
+  
+    game <- team_game_ids[i,]
+
+    per_for_player <- 0.0
+    per_for_game <- 0.0
+    vorp_for_player <- 0.0
+    vorp_for_game <- 0.0
+    ws48_for_player <- 0.0
+    ws48_for_game <- 0.0
+    bpm_for_player <- 0.0
+    bpm_for_game <- 0.0
+
+    for (row in 1:nrow(team_players_adv)) {
+  
+      name <- team_players_adv[row, "last_name"]
+      per  <- team_players_adv[row, "PER"]
+      vorp <- team_players_adv[row, "VORP"]
+      ws48 <- team_players_adv[row, "WS.48"]
+      bpm  <- team_players_adv[row, "BPM"]
+  
+      minutes <- as.integer(game[ , grepl( name , names( game ) ) ])
+  
+      per_for_player <- (minutes / 48) * per
+      per_for_game <- per_for_game + per_for_player
+    
+      vorp_for_player <- (minutes / 48) * vorp
+      vorp_for_game <- vorp_for_game + vorp_for_player
+    
+      ws48_for_player <- (minutes / 48) * ws48
+      ws48_for_game <- ws48_for_game + ws48_for_player
+    
+      bpm_for_player <- (minutes / 48) * bpm
+      bpm_for_game <- bpm_for_game + bpm_for_player
+    }
+
+    per_for_season[[i]] <- Reduce("+",per_for_game)
+    vorp_for_season[[i]] <- Reduce("+",vorp_for_game)
+    ws48_for_season[[i]] <- Reduce("+",ws48_for_game)
+    bpm_for_season[[i]] <- Reduce("+",bpm_for_game)
+  }
+
+  df_team_schedule$PER  <- unlist(per_for_season)
+  df_team_schedule$VORP <- unlist(vorp_for_season)
+  df_team_schedule$WS48 <- unlist(ws48_for_season)
+  df_team_schedule$BPM  <- unlist(bpm_for_season)
+  
+  # return DF
+  df_team_schedule
+}
+```
+
+### Step 1
+
+Build a dataframe based on each team schedule for the 2012-13 NBA season as maintained by the API at www.balldontlie.io that will also include the game-level cumulative advanced statistics for the team based on the individual players' minutes played.
+
+**Goal:** Create a dataframe to represent every game played in the season with data needed for input to the predictive model.
+
+Input (previously generated files): 
+
+- teams.csv
+
+```{r eval=FALSE}
+# Read in the CSV for all 30 times
+teams_2013 <- read.csv("teams.csv", header=TRUE, as.is = TRUE)
+
+# Ball Dont Lie uses starting year for a season, so 2012 means 2013 season with basketball-reference
+season <- "2012"
+
+first_team_id <- teams_2013[1, "team.id.bdl"]
+
+first_team_abr <- teams_2013[1, "team.abr.br"]
+
+first_team_schedule <- retrieve_season_results_for_team_season_pred(first_team_id, first_team_abr, season)
+
+first_team_schedule <- calculate_advanced_stats_for_team_for_season_pred(first_team_schedule, first_team_abr)
+
+season_schedule <- first_team_schedule
+
+# Output df head
+head(season_schedule)
+dim(season_schedule)
+
+# Build the full schedule by team into one large DF
+for (row in 2:5) {
+
+  next_team_id <- teams_2013[row, "team.id.bdl"]
+  next_team_abr <- teams_2013[row, "team.abr.br"]
+   
+  team_schedule <- retrieve_season_results_for_team_season_pred(next_team_id, next_team_abr, season)
+  team_schedule <- calculate_advanced_stats_for_team_for_season_pred(team_schedule, next_team_abr)
+ 
+  season_schedule <- rbind(season_schedule, team_schedule)
+}
+
+head(season_schedule)
+
+dim(season_schedule)
+
+write.csv(season_schedule, "season_schedule_2013_with_all_stats.csv", row.names = TRUE)
+```
+
+For reference, the above code snippet was run six separate times, creating six separate files, as the initial run for all 30 teams errored due to an http response of 429 from www.balldontlie.io which means I was throttled because of too many requests in a certain time frame.
+
+#### season_schedule_2013_with_all_stats_1to5.csv
+
+An example of the near final dataframe that contains each game as an observation with advanced statistics for every game played in the 2012-13 NBA season.
+
+```{r}
+# Read in CSV to show the progress made
+season_schedule_2013 <- read.csv("season_schedule_2013_with_all_stats_1to5.csv", header=TRUE, as.is = TRUE)
+
+dim(season_schedule_2013)
+head(season_schedule_2013)
+```
+
+### Step 2
+
+Build a dataframe in which each row (observation) presents one game played in the NBA season 2012-2013. The purpose of the dataframe is to contain only the statistics pertinent to the algorithm for predicting each game outcome's point differential.
+
+**Goal:** The previously generated six files containing each game for all 30 teams are combined into one dataframe. A removal of the duplicate rows is required as each game is represented twice in the initial retrieval of the six files.
+
+Input:
+
+- season_schedule_2013_with_all_stats_1to5.csv (6 input files total each containing 5 team seasons)
+
+```{r eval=FALSE}
+# Read in all files with the prefix "season_schedule_2013_with_all_stats"
+# Six files, of five teams each, were generated
+tbl_fread <- 
+    list.files(pattern = "season_schedule_2013_with_all_stats_*") %>% 
+    map_df(~fread(.))
+
+# Create one dataframe of all the data
+season_2013 <- as.data.frame(tbl_fread)
+
+head(season_2013)
+dim(season_2013)
+
+# All the games now in one DF
+
+# Keep the columns needed for further analysis
+season_2013 <- season_2013[ , c("id", "home_team_score", "visitor_team_score", "postseason", "home_team.id", "home_team.abbreviation", "visitor_team.id", "visitor_team.abbreviation", "team_id", "elo_i", "Days_Off", "PER", "VORP", "WS48", "BPM"), drop=FALSE ]
+
+dim(season_2013)
+
+# Remove all the postseason games; only use regular season games
+season_2013 <- filter(season_2013, postseason == FALSE)
+
+head(season_2013)
+dim(season_2013)
+
+# Confirm the count of unique games by checking the id column. The unique identifer from BallDontLie API
+unique(season_2013$id)
+
+# In order to merge the one dataframe into a wide view, need to separate the dataframe into home team and visitor team
+# By separating into home and vistor, each resulting dataframe contains each unique game ID once
+home <- filter(season_2013, home_team.id == team_id)
+vis  <- filter(season_2013, visitor_team.id == team_id)
+
+# Merge the home and visitor dataframes by the game id
+# Create a wide dataframe to present each game with statistics of both participating teams
+simple <- merge(home, vis, by="id")
+
+head(simple)
+dim(simple)
+
+# Create final dataframe from the merged dataframe
+# For the two participating teams, place the statistics of the team with the higher Elo score (better rated) first
+# Then place the statistics of the lower rated team second
+df_final_season_2013 <- as.data.frame(simple[ , c("id"), drop=FALSE ])
+
+# Create columns for the statistics of the higher-rated team
+df_final_season_2013$high_elo <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$elo_i.x, simple$elo_i.y )
+df_final_season_2013$high_per <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$PER.x, simple$PER.y )
+df_final_season_2013$high_vorp <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$VORP.x, simple$VORP.y )
+df_final_season_2013$high_bpm <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$BPM.x, simple$BPM.y )
+df_final_season_2013$high_ws48 <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$WS48.x, simple$WS48.y )
+df_final_season_2013$high_days <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$Days_Off.x, simple$Days_Off.y )
+
+# Create a column to indicate if the higher-rated team was home (1) or visitor (0)
+df_final_season_2013$high_home <- ifelse(simple$elo_i.x >= simple$elo_i.y, 1, 0 )
+
+# Create columns for the statistics of the lower-rated team
+df_final_season_2013$low_elo <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$elo_i.x, simple$elo_i.y)
+df_final_season_2013$low_per <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$PER.x, simple$PER.y )
+df_final_season_2013$low_vorp <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$VORP.x, simple$VORP.y )
+df_final_season_2013$low_bpm <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$BPM.x, simple$BPM.y )
+df_final_season_2013$low_ws48 <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$WS48.x, simple$WS48.y )
+df_final_season_2013$low_days <- ifelse(simple$elo_i.x < simple$elo_i.y, simple$Days_Off.x, simple$Days_Off.y )
+
+# Create column for the game outcome's point differential from the perspective of the team with the higher Elo rating at game start
+df_final_season_2013$pts_diff <- ifelse(simple$elo_i.x >= simple$elo_i.y, simple$home_team_score.x - simple$visitor_team_score.x, simple$visitor_team_score.x - simple$home_team_score.x )
+
+dim(df_final_season_2013)
+head(df_final_season_2013)
+
+write.csv(df_final_season_2013, "season_schedule_2013_final_df.csv", row.names = TRUE)
+```
+
+#### season_schedule_2013_final_df.csv
+
+The dataframe created as input to the machine learning predictive modeling Keras API.
+
+- 1229 observations (the number of regular season games in the 2012-13 NBA season)
+- 16 columns (team statistics as previously calculated)
+
+```{r}
+df_final_season_2013 <- read.csv("season_schedule_2013_final_df.csv", header=TRUE, as.is = TRUE)
+
+dim(df_final_season_2013)
+head(df_final_season_2013)
+```
+
+### Analysis
+
+Similar to the analysis of the Players tab, the ability to retrieve and transform data using the R language is a powerful tool that automates calling APIs and screen scraping when needed. The tidyverse libraries are extremely valuable in the data retrieval and transformation steps for preparing raw data as input to analysis or model training.
+
+<div style="margin-bottom:50px;"></div>
+## Predictions
+
+### Attempting Keras API on NBA season 2012-13
+
+Goal: Predict the success of a team at a per-game level. Based on the analysis of individual player metrics, use the player statistics from both teams along with game location as input to predict the point differential of the game’s outcome. For this purpose, the study will use predictive analysis of training and testing data from games of the 2012-13 season to create a model to predict point differential of a game’s outcome based on combined individual player value. The study will attempt to use a machine learning R package Keras to build and evaluate the models.
+
+The following analysis follows the example at https://towardsdatascience.com/keras-and-r-predicting-blood-glucose-levels-with-the-sequential-model-596efe89a6b8,
+
+Read in the complete 2013 season file with every game played and includes the combined advanced statistics for each participating team. The team with the higher Elo rating is identified by the statistics prefixed with high_* and the team with the lower Elo rating is identified by the statistics prefixed with low_*.
+
+```{r}
+# Read in the NBA file
+season_2013 <- read.csv("season_schedule_2013_final_df.csv", header=TRUE, as.is = TRUE)
+
+season_2013 <- season_2013[,3:16]
+```
+
+Confirm dimensions: 1229 observations (games) with 14 features (columns).
+
+```{r}
+dim(season_2013)
+```
+
+Display head of dataframe as sanity check.
+
+```{r}
+head(season_2013)
+```
+
+Columns:
+
+- high_elo: Elo rating of better Elo-rated team before game
+- high_per: Cumulative game PER for better rated team based on players' minutes played of game
+- high_vorp: Cumulative game VORP for better rated team based on players' minutes played of game
+- high_bpm: Cumulative game BPM for better rated team based on players' minutes played of game
+- high_ws48: Cumulative game WS48 for better rated team based on players' minutes played of game
+- high_days: Days since previous game for better rated team (minimum is 1)
+- high_home: Game location based on better rated team (1: home, 0: away)
+- low_elo: Elo rating of lesser Elo-rated team before game
+- low_per: Cumulative game PER for lesser rated team based on players' minutes played of game
+- low_vorp: Cumulative game VORP for lesser rated team based on players' minutes played of game
+- low_bpm: Cumulative game BPM for lesser rated team based on players' minutes played of game
+- low_ws48: Cumulative game WS48 for lesser rated team based on players' minutes played of game
+- low_days: Days since previous game for lesser rated team (minimum is 1)
+
+Output:
+
+- pts_diff: Game result point differential from the perspective of better Elo-rated team before the game
+
+### Feature selection
+
+Given the number of available features, the next steps will identify the features most valuable in predicting the game result's point differential.
+
+Create a correlation plot to see which features can be identified as potentially important in predicting the value of the game result's point differential. By using number, the resulting plot gives specific correlation coefficients for each feature combination.
+
+```{r}
+M <- cor(season_2013)
+corrplot(M, method = "number")
+```
+
+The linear regression model will determine if a feature is significant or insignificant to the result by using the five percent significance level indicating whether to reject the null hypothesis or not. The intention of the linear regression model is to find the features with greater than five percent significance, as to then use those features in building the predictive model.
+
+```{r}
+# Linear Regression
+fit <- lm(pts_diff ~ high_elo + high_per + high_vorp + high_bpm + high_ws48 + high_days + high_home + low_elo + low_per + low_vorp + low_bpm + low_ws48 + low_days, data=season_2013)
+
+summary(fit)
+```
+
+The output from the linear regression model identifies the following attributes as meeting the five percent significance threshold:
+
+- high_per
+- high_vorp
+- high_bpm
+- high_ws48
+- high_home
+- low_elo
+- low_bpm
+- low_days
+
+The Breusch-Pagan test is run to determine the level of heteroscedasticity, which would identify an uneven variance across standard errors.
+
+```{r}
+# Breusch-Pagan Test for Heteroscedasticity
+bptest(fit)
+```
+
+The resulting p-value less than 0.05 indicates heteroscedasticity does exist.
+
+With the presence of heteroscedasticity, a robust regression is executed using Huber weights in this analysis.
+
+```{r}
+# Huber Weights (Robust Regression)
+summary(rr.huber <- rlm(pts_diff ~ high_elo + high_per + high_vorp + high_bpm + high_ws48 + high_days + high_home + low_elo + low_per + low_vorp + low_bpm + low_ws48 + low_days, data=season_2013))
+```
+
+With 1215 degrees of freedom, the two-tailed t critical value is calculated as such.
+
+```{r}
+abs(qt(0.05/2, 1215))
+```
+
+Based on the robust regression t value results, the features with t values greater than the t critical value indicate the null hypothesis can be rejected. Thus, the following features should be considered in building the model based on the absolute value of the difference between t value and t critical:
+
+- high_per
+- high_vorp
+- high_ws48
+- high_home
+- low_elo (close enough)
+- low_bpm
+- low_days
+
+The above list of relevant features will be used as the inputs to one model of predictive analysis.
+
+### All features included
+
+The first model will use all the available features as input to the model.
+
+Input Features:
+
+- high_elo 
+- high_per 
+- high_vorp
+- high_bpm
+- high_ws48
+- high_days
+- high_home
+- low_elo
+- low_per
+- low_vorp
+- low_bpm
+- low_ws48
+- low_days
+
+Output:
+
+- pts_diff
+
+Normalize all the data to ensure each variable is scaled between 0 and 1.
+
+```{r}
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+s_13_max_min_df <- as.data.frame(lapply(season_2013, normalize))
+attach(s_13_max_min_df)
+s_13_max_min_df<-as.matrix(s_13_max_min_df)
+```
+
+Split the input data into three portions: training data, validation data, and completely new data.
+
+```{r}
+ind <- sample(3, nrow(s_13_max_min_df), replace=TRUE, prob = c(0.56,0.24,0.2))
+
+X_train <- s_13_max_min_df[ind==1, 1:13]
+X_val <- s_13_max_min_df[ind==2, 1:13]
+
+y_train <- s_13_max_min_df[ind==1, 14]
+y_val <- s_13_max_min_df[ind==2, 14]
+
+# Held back from training and evaluation; final predictions on this subset
+X_unseen <- s_13_max_min_df[ind==3, 1:13]
+y_unseen <- s_13_max_min_df[ind==3, 14]
+```
+
+Build the model using the Keras API, specifically utilizing the keras_model_sequential.
+
+To determine the number of neurons in the input layer, add one to the number of features in the initial training set. 
+
+- Initial training set features: 13
+- 14 neurons in the input layer
+
+To determine the number of neurons in the hidden layer, using the following formula:
+
+- Training data samples/Factor * (Input Neurons + Output Neurons)
+- For simplicity, using Factor of 1
+- Training Data Samples: 983 
+- (1229 * .8) / (1 * (14 + 1)) = 65
+
+Output layer is one by default.
+
+```{r}
+# Build model
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 14, activation = 'relu', kernel_initializer='RandomNormal', input_shape = c(13)) %>% 
+  layer_dense(units = 65, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'linear')
+
+summary(model)
+```
+
+Summary of model as seen above.
+
+The model will be trained over 30 epochs using the loss and mean absolute error for evaluation. The mean squared error is used to calculate the difference between the predictions and actual values.
+
+```{r}
+# Train model
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam',
+  metrics = c('mae')
+)
+
+history <- model %>% fit(
+  X_train, y_train, 
+  epochs = 30, batch_size = 50, 
+  validation_split = 0.2
+)
+```
+
+The evaluation of the model is performed on the validation data.
+
+```{r}
+model %>% evaluate(X_val, y_val)
+```
+
+The resulting loss and mean absolute error as calculated above.
+
+Calculate the predicted values to state before normalization.
+
+```{r message=FALSE, warning=FALSE}
+pred <- data.frame(y = predict(model, as.matrix(X_val)))
+
+predicted = pred$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+actual = y_val * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+season_2013_predicted <- data.frame(predicted,actual)
+
+attach(season_2013_predicted)
+```
+
+A plot of the loss and mean absolute error over the 30 epochs.
+
+```{r}
+plot(history)
+```
+
+The model calculates a loss of less than 2% and a mean absolute error just over 10%.
+
+Now to run the model again the data withheld from the training and validation.
+
+```{r}
+pred_unseen <- data.frame(y = predict(model, as.matrix(X_unseen)))
+```
+
+Convert the predicted and actual values to form before normalization.
+
+```{r}
+predicted_unseen = pred_unseen$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+actual_unseen = y_unseen * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+X_unseen_df <- as.data.frame(X_unseen)
+```
+
+Based on previous predictive analysis study performed on NBA games, the following linear equation resulted:
+
+- Point_Difference = -2.124987 + (0.031464 * Elo_Difference) + (5.696513 * Home) 
+
+Calculate the game result point differential based on above formula to compare alongside the Keras predictive model.
+
+The resulting dataframe shows the ML model predicted outcome, the actual result, and the linear regression model result.
+
+```{r message=FALSE, warning=FALSE}
+# Want to compare to the actual Elo linear equation
+# pt_diff = −2.124987 + (0.031464 ∗ elo_diff) + (5.696513 ∗ Home) 
+elo_rating <- data.frame(high = X_unseen_df$high_elo)
+elo_rating$low <- X_unseen_df$low_elo
+
+elo_rating$high <- elo_rating$high * abs(diff(range(season_2013$high_elo))) + min(season_2013$high_elo)
+elo_rating$low  <- elo_rating$low  * abs(diff(range(season_2013$low_elo)))  + min(season_2013$low_elo)
+elo_rating$home <- X_unseen_df$high_home
+
+elo_rating$diff <- elo_rating$high - elo_rating$low
+
+elo_lm_unseen = -2.124987 + (0.031464 * elo_rating$diff) + (5.696513 * elo_rating$home)
+
+unseen_results <- data.frame(predicted_unseen, actual_unseen, elo_lm_unseen)
+attach(unseen_results)
+
+head(unseen_results)
+```
+
+Calculate the mean absolute percentage error between the ML model predictions and the actual results.
+
+```{r}
+# Measuring the unseen results
+# Compute the mean absolute percentage error regression loss.
+mape_all <- MAPE(predicted_unseen, actual_unseen)
+mape_all
+```
+
+The mean percentage error is calculated to be over 100%. Not good.
+
+Now calculate the mean percentage error for the previous linear regression model against the actual results. Resulting percentage is also over 100%.
+
+```{r}
+lr_mape <- MAPE(elo_lm_unseen, actual_unseen)
+lr_mape
+```
+
+Plot the actual games results against the predicted results. The scatter plot includes the confidence interval and the linear regression line.
+
+```{r message=FALSE, warning=FALSE}
+# Basic scatter plot
+p <- ggplot(unseen_results, aes(x=actual_unseen, y=predicted_unseen)) + 
+      geom_point() +
+      geom_smooth(method=lm) +
+      xlim(-40, 30) +
+      ylim(-20, 30) + 
+      labs(x = "Actual Game Point Differential", y = "Predicted Game Point Differential")
+p
+```
+
+### Suggested features included
+
+Build a predictive model using the machine learning Keras API as above using only the suggested input features as determined above.
+
+Input Features:
+
+- high_per 
+- high_vorp
+- high_ws48
+- high_home
+- low_elo
+- low_bpm
+- low_days
+
+Output:
+
+- pts_diff
+
+```{r message=FALSE, warning=FALSE}
+# Attempting with the features deemed valuable to the model
+# high_per, high_vorp, high_ws48, high_home, low_bpm, low_elo, low_days
+# and of course keep pts diff
+
+season_2013_focus <- season_2013[ , c("high_per", "high_vorp", "high_ws48", "high_home", "low_bpm", "low_elo", "low_days", "pts_diff"), drop=FALSE]
+  
+s_13_max_min_df_foc <- as.data.frame(lapply(season_2013_focus, normalize))
+attach(s_13_max_min_df_foc)
+s_13_max_min_df_foc<-as.matrix(s_13_max_min_df_foc)
+
+# Don't sample again, reuse first sample results
+#ind <- sample(3, nrow(s_13_max_min_df_foc), replace=TRUE, prob = c(0.56,0.24,0.2))
+
+X_train <- s_13_max_min_df_foc[ind==1, 1:7]
+X_val <- s_13_max_min_df_foc[ind==2, 1:7]
+
+y_train <- s_13_max_min_df_foc[ind==1, 8]
+y_val <- s_13_max_min_df_foc[ind==2, 8]
+
+# Held back from training and evaluation; final predictions on this subset
+X_unseen <- s_13_max_min_df_foc[ind==3, 1:7]
+y_unseen <- s_13_max_min_df_foc[ind==3, 8]
+
+# Create model
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 14, activation = 'relu', kernel_initializer='RandomNormal', input_shape = c(7)) %>% 
+  layer_dense(units = 65, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'linear')
+
+summary(model)
+
+# Train model
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam',
+  metrics = c('mae')
+)
+
+history <- model %>% fit(
+  X_train, y_train, 
+  epochs = 30, batch_size = 50, 
+  validation_split = 0.2
+)
+
+model %>% evaluate(X_val, y_val)
+
+pred <- data.frame(y = predict(model, as.matrix(X_val)))
+
+predicted = pred$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+actual = y_val * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+season_2013_predicted <- data.frame(predicted,actual)
+attach(season_2013_predicted)
+
+plot(history)
+
+# True predictions here
+# Already normalized
+
+pred_unseen <- data.frame(y = predict(model, as.matrix(X_unseen)))
+predicted_unseen = pred_unseen$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+actual_unseen = y_unseen * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+unseen_results <- data.frame(predicted_unseen, actual_unseen)
+attach(unseen_results)
+
+head(unseen_results)
+
+# Measuring the unseen results
+mape_sug <- MAPE(predicted_unseen, actual_unseen)
+mape_sug
+
+# Basic scatter plot
+p <- ggplot(unseen_results, aes(x=actual_unseen, y=predicted_unseen)) + 
+      geom_point() +
+      geom_smooth(method=lm) +
+      xlim(-40, 30) +
+      ylim(-20, 30) + 
+      labs(x = "Actual Game Point Differential", y = "Predicted Game Point Differential")
+
+p
+```
+
+### Personal intuition features included
+
+Build a predictive model using the machine learning Keras API as above using only the input features from personal intuition. The Elo rating represents the overall quality of each team. The BPM of each team would capture the cumulative value of each player participating in the game. The BPM would give weight to better players along with measuring the absence of better players. Days features to capture the amount of rest each team had before the game. The home feature would indicate whether or not the better team had "home-court advantage".
+
+Input Features:
+
+- high_elo 
+- high_bpm
+- high_days
+- high_home
+- low_elo
+- low_bpm
+- low_days
+
+Output:
+
+- pts_diff
+
+```{r warning=FALSE, message=FALSE}
+# Only the columns I think are valuable
+
+season_2013_pst <- season_2013[ , c("high_elo", "high_bpm", "high_days", "high_home", "low_elo", "low_bpm", "low_days", "pts_diff"), drop=FALSE]
+  
+s_13_max_min_df_pst <- as.data.frame(lapply(season_2013_pst, normalize))
+attach(s_13_max_min_df_pst)
+s_13_max_min_df_pst<-as.matrix(s_13_max_min_df_pst)
+
+# Don't sample again, reuse first sample results
+# ind <- sample(3, nrow(s_13_max_min_df_pst), replace=TRUE, prob = c(0.56,0.24,0.2))
+
+X_train <- s_13_max_min_df_pst[ind==1, 1:7]
+X_val <- s_13_max_min_df_pst[ind==2, 1:7]
+
+y_train <- s_13_max_min_df_pst[ind==1, 8]
+y_val <- s_13_max_min_df_pst[ind==2, 8]
+
+# Held back from training and evaluation; final predictions on this subset
+X_unseen <- s_13_max_min_df_pst[ind==3, 1:7]
+y_unseen <- s_13_max_min_df_pst[ind==3, 8]
+
+# Create model
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 14, activation = 'relu', kernel_initializer='RandomNormal', input_shape = c(7)) %>% 
+  layer_dense(units = 65, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'linear')
+
+summary(model)
+
+# Train model
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam',
+  metrics = c('mae')
+)
+
+history <- model %>% fit(
+  X_train, y_train, 
+  epochs = 30, batch_size = 50, 
+  validation_split = 0.2
+)
+
+model %>% evaluate(X_val, y_val)
+
+pred <- data.frame(y = predict(model, as.matrix(X_val)))
+
+predicted = pred$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+actual = y_val * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+season_2013_predicted <- data.frame(predicted,actual)
+
+attach(season_2013_predicted)
+
+plot(history)
+
+# True predictions here
+# Already normalized
+
+pred_unseen <- data.frame(y = predict(model, as.matrix(X_unseen)))
+predicted_unseen = pred_unseen$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+actual_unseen = y_unseen * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+unseen_results <- data.frame(predicted_unseen, actual_unseen)
+attach(unseen_results)
+
+head(unseen_results)
+
+# Measuring the unseen results
+mape_personal <- MAPE(predicted_unseen, actual_unseen)
+mape_personal
+
+# Basic scatter plot
+p <- ggplot(unseen_results, aes(x=actual_unseen, y=predicted_unseen)) + 
+      geom_point() +
+      geom_smooth(method=lm) +
+      xlim(-40, 30) +
+      ylim(-20, 30) + 
+      labs(x = "Actual Game Point Differential", y = "Predicted Game Point Differential")
+p
+```
+
+### All features except Elo rating included
+
+Build a predictive model using the machine learning Keras API as above using all the input features except the Elo rating. This approach attempts to focus the weight on the cumulative value of the players on each team and ignoring the overall team rating in the form of the Elo rating. Otherwise, use additional features considered to play a factor in a game's outcome.
+
+Input Features:
+
+- high_per 
+- high_vorp
+- high_bpm
+- high_ws48
+- high_days
+- high_home
+- low_per
+- low_vorp
+- low_bpm
+- low_ws48
+- low_days
+
+Output:
+
+- pts_diff
+
+```{r warning=FALSE, message=FALSE}
+# Remove the elo columns (as that is team specific)
+
+season_2013_minus_elo <- season_2013[ , c("high_per", "high_vorp", "high_bpm", "high_ws48", "high_days", "high_home", "low_per", "low_vorp", "low_bpm", "low_ws48", "low_days", "pts_diff"), drop=FALSE]
+  
+s_13_max_min_df_minus_elo <- as.data.frame(lapply(season_2013_minus_elo, normalize))
+attach(s_13_max_min_df_minus_elo)
+s_13_max_min_df_minus_elo<-as.matrix(s_13_max_min_df_minus_elo)
+
+# Don't sample again, reuse first sample results
+# ind <- sample(3, nrow(s_13_max_min_df_minus_elo), replace=TRUE, prob = c(0.56,0.24,0.2))
+
+X_train <- s_13_max_min_df_minus_elo[ind==1, 1:11]
+X_val <- s_13_max_min_df_minus_elo[ind==2, 1:11]
+
+y_train <- s_13_max_min_df_minus_elo[ind==1, 12]
+y_val <- s_13_max_min_df_minus_elo[ind==2, 12]
+
+# Held back from training and evaluation; final predictions on this subset
+X_unseen <- s_13_max_min_df_minus_elo[ind==3, 1:11]
+y_unseen <- s_13_max_min_df_minus_elo[ind==3, 12]
+
+# Create model
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 14, activation = 'relu', kernel_initializer='RandomNormal', input_shape = c(11)) %>% 
+  layer_dense(units = 65, activation = 'relu') %>%
+  layer_dense(units = 1, activation = 'linear')
+
+summary(model)
+
+# Train model
+model %>% compile(
+  loss = 'mean_squared_error',
+  optimizer = 'adam',
+  metrics = c('mae')
+)
+
+history <- model %>% fit(
+  X_train, y_train, 
+  epochs = 30, batch_size = 50, 
+  validation_split = 0.2
+)
+
+model %>% evaluate(X_val, y_val)
+
+pred <- data.frame(y = predict(model, as.matrix(X_val)))
+
+predicted = pred$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+actual = y_val * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+season_2013_predicted <- data.frame(predicted,actual)
+attach(season_2013_predicted)
+
+plot(history)
+
+# True predictions here
+# Already normalized
+
+pred_unseen <- data.frame(y = predict(model, as.matrix(X_unseen)))
+predicted_unseen = pred_unseen$y * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+
+actual_unseen = y_unseen * abs(diff(range(season_2013$pts_diff))) + min(season_2013$pts_diff)
+unseen_results <- data.frame(predicted_unseen, actual_unseen)
+attach(unseen_results)
+
+head(unseen_results)
+
+# Measuring the unseen results
+mape_minus_elo <- MAPE(predicted_unseen, actual_unseen)
+mape_minus_elo
+
+# Basic scatter plot
+p <- ggplot(unseen_results, aes(x=actual_unseen, y=predicted_unseen)) + 
+      geom_point() +
+      geom_smooth(method=lm) +
+      xlim(-40, 30) +
+      ylim(-20, 30) + 
+      labs(x = "Actual Game Point Differential", y = "Predicted Game Point Differential")
+p
+```
+
+### Analysis
+
+```{r}
+mape_combined <- c(mape_all, mape_sug, mape_personal, mape_minus_elo, lr_mape)
+
+mape_combined
+```
+
+Previous results from above prediction attempt (each execution produces different results):
+
+- 1.179060 1.110837 1.054806 1.158007 1.002978
+- 1.140692 1.191807 1.155149 1.172318 1.133596
+- 1.242463 1.265072 1.316046 1.257183 1.180764
+
+Unfortunately, the Keras API predictive model never outperformed the previous linear regression formula that only took into account a team's Elo rating before the game. The addition of the individual players' cumulative impact did not increase the model accuracy. Also, as every run of this file has proven, the mean percentage error is always over 100% for each of the predictions. This result proves, at least based on the above model, an NBA game's outcome cannot be predicted by a machine learning model nor a linear regression model.
+
+# Next Steps
+
+To improve upon the hypothesis of load management impacting a team's outcome, more case studies would add value as the study of one team for one season could be an outlier. To truly test this hypothesis, a better study would take into account each team for every season of the past decade to see if the analysis stands.
+
+Given the notion of the replacement player from the VORP statistic, a study could be created to assess the average team or replacement level team against an existing team's schedule. By creating a replacement team, a meaningful baseline could be created to then compare against the ebb and flow of a real team's season.
+
+As for the predictive model, clearly the overall approach needs to be reassessed. The exact point differential of a game is difficult to predict, so perhaps binning the results would allow for better results as the prediction doesn't need to be as precise. 
+
+The predictive model may have suffered for lack of data. The model was trained on only one season of data, approximately 1200 observations. Instead of just one season, as mentioned above, use the input of games from an entire decade to build the predictive model.
+
+As a beginner to the Keras API and the TensorFlow framework, more time and adjustments could be made to the Keras layer settings in an effort to improve the results. This study's attempt performed minimal experimenting with the neuron counts, epoch counts, and batch sizes when training the model. Perhaps more attention to the configurations would provide better dividends.
+
+# Conclusion
+
+In conclusion, the analysis for the Spurs 2012-13 season points to a relationship between the quality of the players in the game and the result of the game. The finding meets expectations, that better players playing are likely going to produce a more advantageous result for the team. The Spurs franchise is an example of fielding a subpar team for a regular season game in an effort to rest the players for a long playoff run. The 2012-13 season is only one season, but the team's overall success does support the franchise's believe in player load management.
+
+As for the predictive model, the individual player inputs did not improve prediction accuracy over a simpler linear regression formula. Predicting the exact result of an NBA game is difficult given the many variables of a game. The individual player impact of a game does not prove more valuable than the overall quality of the team itself. The flow and decisions within the name are not taken into account within the model, so the point differential outcome of the game remains highly unpredictable.
